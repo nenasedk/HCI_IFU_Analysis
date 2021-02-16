@@ -24,7 +24,7 @@ def main(args):
     args = parser.parse_args(args)
 
     if "gpi" in instrument.lower():
-        pxscale = 0.01422
+        pxscale = 0.0162
     elif "sphere" in instrument.lower():
         pxscale = 0.007462
     data_dir = args.path

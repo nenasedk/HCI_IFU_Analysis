@@ -35,7 +35,7 @@ from pynpoint import Pypeline, \
                      SimplexMinimizationModule,\
                      StarAlignmentModule,\
                      ShiftImagesModule
-                     
+
 data_dir = "/u/nnas/data/HR8799/HR8799_AG_reduced/GPIK2/" #SPHERE-0101C0315A-20/channels/
 distance = 41.2925 #pc
 instrument = "GPI"
@@ -68,9 +68,11 @@ def main(args):
 
     if "sphere" in instrument.lower():
         nChannels = 39
+        pixscale = 0.00746
         shutil.copy("config/Pynpoint_config_SPHERE.ini",data_dir + "PynPoint_config.ini")
     elif "gpi" in instrument.lower():
         nChannels = 37
+        pixscale = 0.0162
         shutil.copy("config/Pynpoint_config_GPI.ini",data_dir + "PynPoint_config.ini")
 
     if not os.path.isdir(data_dir + "pynpoint/"):
@@ -87,11 +89,11 @@ def main(args):
         posn = (posn_dict["Px RA offset [px]"], posn_dict["Px DEC offset [px]"])
 
     set_fwhm()
-    preproc_files()
+    data_shape = preproc_files()
     run_all_channels(nChannels,
                  base_name,
                  instrument + "_" + planet_name,
-                 posn)
+                 (posn[0] + data_shape[2],posn[1]+data_shape[3]))
     contrasts = save_contrasts(nChannels,
                             base_name,
                             data_dir + "pynpoint/",
@@ -249,6 +251,7 @@ def run_all_channels(nchannels, base_name, output_name, posn):
         if os.path.isfile(working_dir + "/PynPoint_database.hdf5"):
             os.remove(working_dir + "/PynPoint_database.hdf5")
         simplex_one_channel(str(channel),name,psf_name,output_name,posn)
+
     residuals = []
     for pca in pcas:
         rpcas = []
@@ -306,12 +309,15 @@ def set_fwhm():
 def preproc_files():
     if os.path.exists(data_dir + "HR8799_"+instrument+"_" + str(channel) + '_reduced.fits'):
         return
+    data_shape = None
     if "sphere" in instrument.lower():
         science_name = "frames_removed.fits"
         psf_name = "psf_satellites_calibrated.fits"
 
         hdul = fits.open(data_dir + science_name)
         cube = hdul[0].data
+        if data_shape is None:
+            data_shape = cube.shape
         for channel,frame in enumerate(cube[:]):
             hdu = fits.PrimaryHDU(frame)
             hdul_new = fits.HDUList([hdu])
@@ -333,6 +339,7 @@ def preproc_files():
         science = dataset.input
 
     hdul.close()
+    return data_shape
 
 if __name__ == '__main__':
     main(sys.argv[1:])

@@ -81,10 +81,8 @@ def get_astrometry(dataset, PSF_cube, guesssep,guesspa, guessflux, data_dir, pla
         os.makedirs(data_dir + "pyklip", exist_ok=True)
 
     #### Astrometry Prep ###
-    guesssep = 30.263908266374713
-    guesspa = 281.79004721905693# estimate of position angle, in degrees
-    guessflux = 5e-5 # estimated contrast
-    dn_per_contrast = dataset.dn_per_contrast# your_flux_conversion # factor to scale PSF to star PSF. For GPI, this is dataset.dn_per_contrast
+    if "gpi" in instrument:
+        dn_per_contrast = dataset.dn_per_contrast# your_flux_conversion # factor to scale PSF to star PSF. For GPI, this is dataset.dn_per_contrast
     #guessspec = np.array(klipcontrast) #your_spectrum # should be 1-D array with number of elements = np.size(np.unique(dataset.wvs))
     # klipcontrast read from residuals below
     numbasis=[5,10]

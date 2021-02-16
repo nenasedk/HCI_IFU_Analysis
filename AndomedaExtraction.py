@@ -29,6 +29,7 @@ planet_name = "HR8799"
 numthreads = 35
 pixscale = 0.00746
 fwhm = 3.5
+
 def main(args):
     sys.path.append(os.getcwd())
 
@@ -67,16 +68,17 @@ def main(args):
         posn_dict = read_astrometry(data_dir,planet_name)
         posn = (posn_dict["Px RA offset [px]"], posn_dict["Px DEC offset [px]"])
     contrasts, snrs = run_andromeda(science,angles,wlen,psfs)
-    aperture_phot_extract(contrasts,posn)
+    aperture_phot_extract(contrasts,(posn[0]+science.shape[2],posn[1]+science.shape[3]))
     return
 
 def init():
+    global pixscale
     if "sphere" in instrument.lower():
         science_name = "frames_removed.fits"
         parang_name = "parang_removed.fits"
         psf_name = "psf_satellites_calibrated.fits"
         wlen_name = "wvs_micron.fits"
-
+        pixscale = 0.00746
         # Science Data
         hdul = fits.open(data_dir + science_name)
         science = hdul[0].data
@@ -94,6 +96,7 @@ def init():
         psfs = psf_hdul[0].data
         psf_hdul.close()
     elif "gpi" in instrument.lower():
+        pixscale = 0.0162
         science_name = "*distorcorr.fits"
         psf_name = "*-original_PSF_cube.fits""
         psfs = fits.open(data_dir + psf_name)[0].data

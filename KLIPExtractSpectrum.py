@@ -29,7 +29,7 @@ data_dir = "/u/nnas/data/"
 instrument = "GPI"
 planet_name = "HR8799"
 numthreads = 35
-
+pxscale = 0.01422
 def main(args):
     sys.path.append(os.getcwd())
 
@@ -57,14 +57,16 @@ def main(args):
 
     if "gpi" in instrument.lower():
         dataset = init_gpi()
+        pxscale = 0.0162
     elif "sphere" in instrument.lower():
         dataset = init_sphere()
+        pxscale = 0.007462
     PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
     if not os.path.exists(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):
         posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
     else: 
         posn_dict = read_astrometry(data_dir,planet_name)
-        posn = (posn_dict["Separation [mas]"], posn_dict["PA [deg]"])
+        posn = (posn_dict["Separation [mas]"]/pxscale/1000, posn_dict["PA [deg]"])
     exspect, fm_matrix = KLIP_Extraction(dataset, PSF_cube, posn, numthreads)
     contrasts,flux = get_spectrum(dataset, exspect, stellar_model, spot_to_star_ratio)
     return
@@ -213,6 +215,6 @@ def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
         
     # Contrast, Flux Density (W/m^2/micron)
     return exspect*spot_to_star_ratio,exspect*spot_to_star_ratio*stellar_model[1]*(distance/10.)**2
-    
+
 if __name__ == '__main__':
     main(sys.argv[1:])
