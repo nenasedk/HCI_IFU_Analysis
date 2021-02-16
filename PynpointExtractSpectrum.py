@@ -1,5 +1,5 @@
 import sys,os
-
+import shutil
 import numpy as np
 
 import matplotlib.pyplot as plt
@@ -35,6 +35,7 @@ from pynpoint import Pypeline, \
                      SimplexMinimizationModule,\
                      StarAlignmentModule,\
                      ShiftImagesModule
+                     
 data_dir = "/u/nnas/data/HR8799/HR8799_AG_reduced/GPIK2/" #SPHERE-0101C0315A-20/channels/
 distance = 41.2925 #pc
 instrument = "GPI"
@@ -62,13 +63,16 @@ def main(args):
     planet_name = args.name
     guesssep, guesspa, guessflux = args.posn
     base_name + "HR8799_" + instrument
+    if not data_dir.ends_with("/"):
+        data_dir += "/"
 
     if "sphere" in instrument.lower():
         nChannels = 39
+        shutil.copy("config/Pynpoint_config_SPHERE.ini",data_dir + "PynPoint_config.ini")
     elif "gpi" in instrument.lower():
         nChannels = 37
-    if not data_dir.ends_with("/"):
-        data_dir += "/"
+        shutil.copy("config/Pynpoint_config_GPI.ini",data_dir + "PynPoint_config.ini")
+
     if not os.path.isdir(data_dir + "pynpoint/"):
         os.mkdir(data_dir + "pynpoint")
     if not os.path.exjsts(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):

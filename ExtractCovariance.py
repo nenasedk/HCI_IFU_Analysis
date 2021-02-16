@@ -16,12 +16,17 @@ def main(args):
     global data_dir 
     global instrument
     global planet_name
+    global pxscale
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=str, default= "/u/nnas/data/", required=True)
     parser.add_argument("instrument", type=str, default= "GPI", required=True)
     parser.add_argument("name", type=str, default= "HR8799", required=True)   
     args = parser.parse_args(args)
 
+    if "gpi" in instrument.lower():
+        pxscale = 0.01422
+    elif "sphere" in instrument.lower():
+        pxscale = 0.007462
     data_dir = args.path
     instrument = args.instrument
     planet_name = args.name

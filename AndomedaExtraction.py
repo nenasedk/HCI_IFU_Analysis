@@ -124,7 +124,7 @@ def run_andromeda(data,angles,wlen,psfs):
         pixscale = 7.46                                            # Pixscale [mas/px]
     else:
         diam_tel = 8.                                             # Telescope diameter [m]
-        pixscale = 14.14                                            # Pixscale [mas/px]
+        pixscale = 14.22                                            # Pixscale [mas/px]
     PIXSCALE_NYQUIST = (1/2.*np.mean(wlen)*1e-6/diam_tel)/np.pi*180*3600*1e3 # Pixscale at Shannon [mas/px]
     oversampling = PIXSCALE_NYQUIST /  pixscale                # Oversampling factor [1]
     fwhm = 7*oversampling
@@ -244,7 +244,7 @@ def mcmc_flux(snrs,rs,ts,fs):
     for i,frame in enumerate(snrs):
         init = np.array([rs[i],ts[i],fs[i]]) #r,theta,flux
         psf = np.median(psf[i],axis=0)
-        chain = mcmc_negfc_sampling(frame, angles, psf, ncomp=30, plsc=pixscale,                                
+        chain = mcmc_negfc_sampling(frame, angles, psf, ncomp=30, plsc=/1000,                                
                                     fwhm=fwhm, svd_mode='lapack', annulus_width=3, 
                                     aperture_radius=3, initial_state=init, nwalkers=nwalkers, 
                                     bounds=None, niteration_min=itermin, rhat_count_threshold=1,
