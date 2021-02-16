@@ -1,5 +1,5 @@
 import glob
-import os
+import sys,os
 import numpy as np
 import pyklip.instruments.GPI as GPI
 import pyklip.instruments.SPHERE as SPHERE

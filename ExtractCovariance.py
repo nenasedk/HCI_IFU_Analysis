@@ -10,7 +10,7 @@ instrument = "GPI"
 planet_name = "HR8799e"
 pxscale = 0.00746
 
-def __main__(args):
+def main(args):
     sys.path.append(os.getcwd())
 
     global data_dir 
@@ -35,7 +35,7 @@ def __main__(args):
     else:
         print("No residual file found!")
         return
-        
+
     if len(contrast.shape)==4:
         npca = contrast.shape[0]
         nl = contrast.shape[1]
@@ -125,3 +125,6 @@ def normalize_errors(contrasts):
     # save as array with dims (npca,nl)
     
     return
+
+if __name__ == '__main__':
+    main(sys.argv[1:])

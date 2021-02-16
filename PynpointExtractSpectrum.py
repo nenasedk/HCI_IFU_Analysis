@@ -44,7 +44,7 @@ fwhm = 3.5*0.01414 #0.134
 pixscale = 0.00746
 numthreads = 35
 
-def __main__(args):
+def main(args):
     sys.path.append(os.getcwd())
 
     global data_dir 
@@ -329,3 +329,6 @@ def preproc_files():
         science = dataset.input
 
     hdul.close()
+
+if __name__ == '__main__':
+    main(sys.argv[1:])

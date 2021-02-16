@@ -30,7 +30,7 @@ instrument = "GPI"
 planet_name = "HR8799"
 numthreads = 35
 
-def __main__(args):
+def main(args):
     sys.path.append(os.getcwd())
 
     global data_dir 
@@ -128,10 +128,10 @@ def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
     subsections = [[(planet_pa+(4.0*i*stamp_size)-2.0*stamp_size)/180.*np.pi,\
                     (planet_pa+(4.0*i*stamp_size)+2.0*stamp_size)/180.*np.pi] for i in range(sections)]
 
-    num_k_klip = len(numbasis) # how many k_klips running
+    #num_k_klip = len(numbasis) # how many k_klips running
     N_frames = len(dataset.input)
     N_cubes = np.size(np.unique(dataset.filenums))
-    nl = N_frames // N_cubes
+    #nl = N_frames // N_cubes
 
     spectra_template = None #np.tile(np.array(exspect[i]),N_cubes)
 
@@ -200,7 +200,7 @@ def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
         ax.plot(wlen,exspect[i]*spot_to_star_ratio*stellar_model[1]*(distance/10.)**2,label=str(numbasis[i]),alpha=0.5)
     ax.plot(wlen,m_cont*spot_to_star_ratio*stellar_model[1]*(distance/10.)**2 ,label = 'Mean',linewidth=4)
     ax.set_xlabel("Wavelength [micron]")
-    ax.set_ylabel("Flux Density [W/m$^{2}$/$\mu$m")
+    ax.set_ylabel(r"Flux Density [W/m$^{2}/\mu$m")
     ax.set_title(planet_name + " " + instrument + " Flux KLIP")
     plt.legend()
     #ax.set_ylim(0,1e-4)
@@ -213,3 +213,6 @@ def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
         
     # Contrast, Flux Density (W/m^2/micron)
     return exspect*spot_to_star_ratio,exspect*spot_to_star_ratio*stellar_model[1]*(distance/10.)**2
+    
+if __name__ == '__main__':
+    main(sys.argv[1:])

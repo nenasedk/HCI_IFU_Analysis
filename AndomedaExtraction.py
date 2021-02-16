@@ -29,7 +29,7 @@ planet_name = "HR8799"
 numthreads = 35
 pixscale = 0.00746
 fwhm = 3.5
-def __main__(args):
+def main(args):
     sys.path.append(os.getcwd())
 
     global data_dir 
@@ -67,6 +67,7 @@ def __main__(args):
         posn_dict = read_astrometry(data_dir,planet_name)
         posn = (posn_dict["Px RA offset [px]"], posn_dict["Px DEC offset [px]"])
     contrasts, snrs = run_andromeda(science,angles,wlen,psfs)
+    aperture_phot_extract(contrasts,posn)
     return
 
 def init():
@@ -141,7 +142,7 @@ def run_andromeda(data,angles,wlen,psfs):
         else:
             size = psfs.shape[1]
         
-        psf, shy1, shx1 = cube_recenter_2dfit(psfs[i,:,int(psfs.shape[size/2-6):int(size/2+6),int(size/2-6):int(size/2+6)], 
+        psf, shy1, shx1 = cube_recenter_2dfit(psfs[i,:,int(psfs.shape[size/2-11):int(size/2+11),int(size/2-11):int(size/2+11)], 
                                             xy=(6,6), fwhm=fwhm, nproc=1, subi_size=6, 
                                             model='gauss', negative=False, full_output=True, debug=False,plot=False)
 
@@ -190,15 +191,42 @@ def run_andromeda(data,angles,wlen,psfs):
     hdul.close()
     return contrasts, snrs
 
-def guess_flux(snrs,posn):
+def aperture_phot_extract(contrasts,posn):
+    mask = create_circular_mask(contrasts.shape[1],contrasts.shape[2],
+                            center = posn, 
+                            radius = 3*fwhm)
+    aperture = CircularAperture([posn], r=3*fwhm)
+    spectrum = []
+    for frame in contrasts:
+        phot_table = aperture_photometry(frame,aperture)
+        spectrum.append(phot_table['aperture_sum'][0])
+    spectrum = np.array(spectrum)
+    np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "contrast",spectrum)
+    return spectrum
+
+def guess_flux(cube,posn):
     rs = [] #radius (separation)
     ts = [] #theta (position angle)
     fs = [] #flux
     output_dir = data_dir + "andromeda/"
-    for i,frame in enumerate(snrs):
-        psf = np.median(psf[i],axis=0)
-        r_0, theta_0, f_0 = firstguess(frame, angles, psf, ncomp=30, plsc=pixscale,
-                                    planets_xy_coord=[posn], fwhm=fwhm, 
+    rs = [],
+    ts = []
+    fs = []
+    for i,frame in enumerate(cube):
+        PIXSCALE_NYQUIST = (1/2.*wlen[37]*1e-6/diam_tel)/np.pi*180*3600*1e3 # Pixscale at Shannon [mas/px]
+        oversampling = PIXSCALE_NYQUIST /  pixscale                # Oversampling factor [1]
+        print(oversampling)
+        psf, shy1, shx1 = cube_recenter_2dfit(psfs[37,:,int(255/2-6):int(255/2+6),int(255/2-6):int(255/2+6)], 
+                                            xy=(6,6), fwhm=fwhm, nproc=1, subi_size=6, 
+                                            model='gauss', negative=False, 
+                                            full_output=True, debug=False,plot=False)
+        print(psf.shape)
+        psf = np.median(psf,axis=0)
+        psf = vip.metrics.normalize_psf(psf, fwhm, size=11)
+        plot_frames(psf, grid=True, size_factor=4)
+
+        r_0, theta_0, f_0 = firstguess(frame, angles, psf, ncomp=30, plsc=pxscale,
+                                    planets_xy_coord=[(159, 109)], fwhm=fwhm, 
                                     f_range=None, annulus_width=3, aperture_radius=3,
                                     simplex=True, plot=True, verbose=True)
         rs.append(r_0)
@@ -208,7 +236,6 @@ def guess_flux(snrs,posn):
     ts = np.array(ts)
     fs = np.array(fs)
     np.save(output_dir + extraction_name + "_astrometry",np.array([rs,ts,fs]))
-    return rs,ts,fs
 
 def mcmc_flux(snrs,rs,ts,fs):
     nwalkers, itermin, itermax = (100, 200, 500)
@@ -235,3 +262,19 @@ def mcmc_flux(snrs,rs,ts,fs):
     confs = np.array(conf)
     np.save(output_dir + extraction_name + "_best_fit",maxs)
     np.save(output_dir + extraction_name + "_intervals",confs)
+
+def create_circular_mask(h, w, center=None, radius=None):
+
+    if center is None: # use the middle of the image
+        center = (int(w/2), int(h/2))
+    if radius is None: # use the smallest distance between the center and image walls
+        radius = min(center[0], center[1], w-center[0], h-center[1])
+
+    Y, X = np.ogrid[:h, :w]
+    dist_from_center = np.sqrt((X - center[0])**2 + (Y-center[1])**2)
+
+    mask = dist_from_center >= radius
+    return mask
+
+if __name__ == '__main__':
+    main(sys.argv[1:])
