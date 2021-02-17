@@ -102,63 +102,6 @@ def main(args):
 
 
 
-def keep_psf_frame(frame):
-    if np.any(np.isnan(frame[10:-10,10:-10])):
-        return False
-    xs = frame.shape[0]/2
-    ys = frame.shape[1]/2
-    offset = frame.shape[0]/4
-    
-    pos_list = [[xs,ys],
-                [xs + offset, ys],
-                [xs, ys + offset],
-                [xs - offset, ys],
-                [xs, ys - offset]]
-    apertures = CircularAperture(pos_list,6)
-    phot_table = aperture_photometry(frame, apertures)
-    s0 = phot_table['aperture_sum'][0]
-    s1 = phot_table['aperture_sum'][1]
-    s2 = phot_table['aperture_sum'][2]
-    s3 = phot_table['aperture_sum'][3]
-    s4 = phot_table['aperture_sum'][4]
-
-    mean_bkg = np.mean(np.array([s1,s2,s3,s4]))
-    std = np.std(mean_bkg)
-    #print(s0,std,mean_bkg)
-    if s0 - mean_bkg < 1.5*std :
-        return False
-    return True
-
-def median_combine_psf_cube(cube,output_place,output_name):
-    psfs = []
-    for channel,stack in enumerate(cube[:]):
-        keep = []
-        for frame in stack:
-            if keep_psf_frame(frame):
-                keep.append(frame)
-        
-        psf = np.nan_to_num(np.median(np.array(keep),axis = 0))
-        psf = np.pad(psf,((60,60),(60,60)))
-        print(psf.shape)
-        psfs.append(psf)
-        hdu = fits.PrimaryHDU(psf)
-        hdul_new = fits.HDUList([hdu])
-        hdul_new.writeto(output_place + output_name +"_" + str(channel) + '_PSF.fits',
-                        overwrite = True)
-    return psfs
-def reshape_psf(filename):
-    psfs = []
-    hdul = fits.open(filename,mode='update')
-    cube = hdul[0].data
-    if cube.shape[0] <250:
-        psf = np.pad(cube,((40,41),(40,41)))
-    else:
-        psf = cube
-    hdul[0].data = psf
-    hdul.flush()
-    hdul.close()
-    return psfs
-
 def save_residuals(residuals,name,output_place):   
     hdu = fits.PrimaryHDU(residuals)
     hdul = fits.HDUList([hdu])
@@ -340,6 +283,67 @@ def preproc_files():
 
     hdul.close()
     return data_shape
+
+###########
+# Obsolete
+###########
+def keep_psf_frame(frame):
+    if np.any(np.isnan(frame[10:-10,10:-10])):
+        return False
+    xs = frame.shape[0]/2
+    ys = frame.shape[1]/2
+    offset = frame.shape[0]/4
+    
+    pos_list = [[xs,ys],
+                [xs + offset, ys],
+                [xs, ys + offset],
+                [xs - offset, ys],
+                [xs, ys - offset]]
+    apertures = CircularAperture(pos_list,6)
+    phot_table = aperture_photometry(frame, apertures)
+    s0 = phot_table['aperture_sum'][0]
+    s1 = phot_table['aperture_sum'][1]
+    s2 = phot_table['aperture_sum'][2]
+    s3 = phot_table['aperture_sum'][3]
+    s4 = phot_table['aperture_sum'][4]
+
+    mean_bkg = np.mean(np.array([s1,s2,s3,s4]))
+    std = np.std(mean_bkg)
+    #print(s0,std,mean_bkg)
+    if s0 - mean_bkg < 1.5*std :
+        return False
+    return True
+
+def median_combine_psf_cube(cube,output_place,output_name):
+    psfs = []
+    for channel,stack in enumerate(cube[:]):
+        keep = []
+        for frame in stack:
+            if keep_psf_frame(frame):
+                keep.append(frame)
+        
+        psf = np.nan_to_num(np.median(np.array(keep),axis = 0))
+        psf = np.pad(psf,((60,60),(60,60)))
+        print(psf.shape)
+        psfs.append(psf)
+        hdu = fits.PrimaryHDU(psf)
+        hdul_new = fits.HDUList([hdu])
+        hdul_new.writeto(output_place + output_name +"_" + str(channel) + '_PSF.fits',
+                        overwrite = True)
+    return psfs
+    
+def reshape_psf(filename):
+    psfs = []
+    hdul = fits.open(filename,mode='update')
+    cube = hdul[0].data
+    if cube.shape[0] <250:
+        psf = np.pad(cube,((40,41),(40,41)))
+    else:
+        psf = cube
+    hdul[0].data = psf
+    hdul.flush()
+    hdul.close()
+    return psfs
 
 if __name__ == '__main__':
     main(sys.argv[1:])
