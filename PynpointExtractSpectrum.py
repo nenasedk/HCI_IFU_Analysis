@@ -176,14 +176,14 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,waffle = Fa
                                        res_out_tag = 'flux_channel_' + str(channel)+"_",
                                        flux_position_tag = 'flux_pos_channel_' + str(channel) +"_",
                                        position = posn,
-                                       magnitude = 16.0,
-                                       psf_scaling = -1,
-                                       merit = 'gaussian',
-                                       aperture = 0.07,
-                                       tolerance = 0.005,
-                                       pca_number = pcas,
-                                       cent_size = 0.15,
-                                       offset = 4)
+                                       magnitude = 16.0, # approximate planet contrast in mag
+                                       psf_scaling = -1, # deal with spectrum mormalization later
+                                       merit = 'gaussian', #better than hessian
+                                       aperture = 0.07, # in arcsec
+                                       tolerance = 0.005, # tighter tolerance is good
+                                       pca_number = pcas, #listed above
+                                       cent_size = 0.15, # how much to block out 
+                                       offset = 0.0) #use fixed astrometry from KLIP
 
     pipeline.add_module(module)
     pipeline.run()
