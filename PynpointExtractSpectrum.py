@@ -122,7 +122,7 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,waffle = Fa
     reshape_psf(data_dir + psf_name)
 
     pipeline = Pypeline(working_place_in=data_dir,
-                        data_dir_in=data_dir,
+                        input_place_in=data_dir,
                         output_place_in=data_dir + "pynpoint/")
 
     module = FitsReadingModule(name_in="read_science",
@@ -163,12 +163,14 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,waffle = Fa
 
     pipeline.add_module(module)
     if "gpi" in instrument.lower():
+        # Not really sure why this is here...
         module = ShiftImagesModule(name_in = "center",
                                    image_in_tag = "psf",
                                    image_out_tag = "psf_centered",
                                    shift_xy = (0.5,0.5),
                                    interpolation = 'spline')
-        pipeline.add_module(module)
+        # Let's not use this for now
+        # pipeline.add_module(module)
 
     module = SimplexMinimizationModule(name_in = 'simplex',
                                        image_in_tag = 'science_bad',
