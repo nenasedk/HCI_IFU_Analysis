@@ -83,6 +83,22 @@ def get_astrometry(dataset, PSF_cube, guesssep,guesspa, guessflux, data_dir, pla
     #### Astrometry Prep ###
     if "gpi" in instrument:
         dn_per_contrast = dataset.dn_per_contrast# your_flux_conversion # factor to scale PSF to star PSF. For GPI, this is dataset.dn_per_contrast
+    if "sphere" in instrument:
+        try:
+            # Check to see if we have sat spot based psfs in the data dir
+            """hdul = fits.open(data_dir + "psf_satellites_calibrated.fits")
+            calib = hdul[0].data
+            hdul.close()
+            hdul = fits.open(data_dir + "psf_satellites.fits")
+            sats = hdul[0].data
+            hdul.close()"""
+            # Actually, I think if we're using the calibrated psfs, this is already taken care of
+            dn_per_contrast = 1.0#np.mean(np.mean(np.mean(sats[:,:]/calib[:,:],axis=0),axis=1),axis=0)
+        except:
+            # If not, then we just set the max value of our stellar psf as our flux calibration.
+            # This should be scaled by the integration times, but we can do that at the end
+            dn_per_contrast = np.max(dataset.psfs)
+            pass
     #guessspec = np.array(klipcontrast) #your_spectrum # should be 1-D array with number of elements = np.size(np.unique(dataset.wvs))
     # klipcontrast read from residuals below
     numbasis=[5,10]
@@ -159,7 +175,6 @@ def get_astrometry(dataset, PSF_cube, guesssep,guesspa, guessflux, data_dir, pla
     elif "sphere" in instrument.lower():
         platescale = dataset.platescale*1000
         plate_err = 0.02
-        parang_err = 
     # Outputs and Erro Propagation
     fit.propogate_errs(star_center_err=0.05, 
                        platescale=platescale, 

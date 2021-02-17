@@ -98,7 +98,7 @@ def init():
     elif "gpi" in instrument.lower():
         pixscale = 0.0162
         science_name = "*distorcorr.fits"
-        psf_name = "*-original_PSF_cube.fits""
+        psf_name = "*-original_PSF_cube.fits"
         psfs = fits.open(data_dir + psf_name)[0].data
 
         filelist = glob.glob(data_dir +science_name)
@@ -145,8 +145,8 @@ def run_andromeda(data,angles,wlen,psfs):
         else:
             size = psfs.shape[1]
         
-        psf, shy1, shx1 = cube_recenter_2dfit(psfs[i,:,int(psfs.shape[size/2-11):int(size/2+11),int(size/2-11):int(size/2+11)], 
-                                            xy=(6,6), fwhm=fwhm, nproc=1, subi_size=6, 
+        psf, shy1, shx1 = cube_recenter_2dfit(psfs[i,:,int(size/2-11):int(size/2+11),int(size/2-11):int(size/2+11)], 
+                                            xy=(11,11), fwhm=fwhm, nproc=1, subi_size=6, 
                                             model='gauss', negative=False, full_output=True, debug=False,plot=False)
 
         cube, shy1, shx1 = cube_recenter_2dfit(stack[:,:-1,:-1], 
@@ -247,7 +247,7 @@ def mcmc_flux(snrs,rs,ts,fs):
     for i,frame in enumerate(snrs):
         init = np.array([rs[i],ts[i],fs[i]]) #r,theta,flux
         psf = np.median(psf[i],axis=0)
-        chain = mcmc_negfc_sampling(frame, angles, psf, ncomp=30, plsc=/1000,                                
+        chain = mcmc_negfc_sampling(frame, angles, psf, ncomp=30, plsc=pixscale/1000,                                
                                     fwhm=fwhm, svd_mode='lapack', annulus_width=3, 
                                     aperture_radius=3, initial_state=init, nwalkers=nwalkers, 
                                     bounds=None, niteration_min=itermin, rhat_count_threshold=1,

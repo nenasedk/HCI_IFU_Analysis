@@ -37,13 +37,16 @@ from pynpoint import Pypeline, \
                      ShiftImagesModule
 
 data_dir = "/u/nnas/data/HR8799/HR8799_AG_reduced/GPIK2/" #SPHERE-0101C0315A-20/channels/
-distance = 41.2925 #pc
 instrument = "GPI"
 planet_name = "HR8799e"
+
+distance = 41.2925 #pc
 pcas = [3,4,5,8,10,12,15,20]
 fwhm = 3.5*0.01414 #0.134
 pixscale = 0.00746
 numthreads = 35
+DIT_SCIENCE = 64.0
+DIT_FLUX = 4.0
 
 def main(args):
     sys.path.append(os.getcwd())
@@ -51,11 +54,15 @@ def main(args):
     global data_dir 
     global instrument
     global planet_name
+    global DIT_SCIENCE
+    global DIT_FLUX
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=str, default= "/u/nnas/data/", required=True)
     parser.add_argument("instrument", type=str, default= "GPI", required=True)
     parser.add_argument("name", type=str, default= "HR8799", required=True)   
     parser.add_argument("posn", type=int, nargs = "+", required=True)
+    parser.add_argument("-ds","--ditscience", type=float, required=False)
+    parser.add_argument("-df","--ditflux", type=float, required=False)
     args = parser.parse_args(args)
 
     data_dir = args.path
@@ -63,6 +70,10 @@ def main(args):
     planet_name = args.name
     guesssep, guesspa, guessflux = args.posn
     base_name + "HR8799_" + instrument
+    if args.ditscience is not None:
+        DIT_SCIENCE = args.ditscience
+    if args.ditflux is not None:
+        DIT_FLUX = args.ditflux
     if not data_dir.ends_with("/"):
         data_dir += "/"
 
@@ -274,13 +285,25 @@ def preproc_files():
             hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + str(channel) + '_PSF.fits',overwrite = True)
     elif "gpi" in instrument.lower():
         science_name = "*distorcorr.fits"
-        psf_name = "*-original_PSF_cube.fits""
+        psf_name = "*-original_PSF_cube.fits"
         psfs = fits.open(data_dir + psf_name)[0].data
 
         filelist = glob.glob(data_dir +science_name)
         dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf)
-        science = dataset.input
 
+        # Need to order the GPI data for pynpoint
+        shape = dataset.input.shape
+        science = dataset.input.reshape(37,len(filelist),shape[1],shape[2])
+        if data_shape is None:
+            data_shape = science.shape
+        for channel,frame in enumerate(science[:]):
+            hdu = fits.PrimaryHDU(frame)
+            hdul_new = fits.HDUList([hdu])
+            hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + str(channel) + '_reduced.fits',overwrite=True)
+        for channel,frame in enumerate(psfs):
+            hdu = fits.PrimaryHDU(frame)
+            hdul_new = fits.HDUList([hdu])
+            hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + str(channel) + '_PSF.fits',overwrite = True)
     hdul.close()
     return data_shape
 
