@@ -1,5 +1,7 @@
 import glob
 import sys,os
+os.environ["OMP_NUM_THREADS"] = "1"
+
 import numpy as np
 import pyklip.instruments.GPI as GPI
 import pyklip.instruments.SPHERE as SPHERE
@@ -10,11 +12,15 @@ import pyklip.fmlib.fmpsf as fmpsf
 import pyklip.fitpsf as fitpsf
 
 import pyklip.parallelized as parallelized
+import matplotlib
+matplotlib.use('Agg') # set the backend before importing pyplot
 import matplotlib.pyplot as plt
 from astropy.io import fits
 import spectres
 
 instrument = "GPI"
+numthreads = 35
+
 #def klipData(dataset,data_dir,output_dir):
 def init_sphere(data_dir):
     global instrument
@@ -76,33 +82,24 @@ def set_psfs(dataset):
     return PSF_cube, calibrated_PSF_model, spot_to_star_ratio
 
 
-def get_astrometry(dataset, PSF_cube, guesssep,guesspa, guessflux, data_dir, planet_name):
+def get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, planet_name):
     if not os.path.isdir(data_dir + "pyklip"):
         os.makedirs(data_dir + "pyklip", exist_ok=True)
 
     #### Astrometry Prep ###
-    if "gpi" in instrument:
-        dn_per_contrast = dataset.dn_per_contrast# your_flux_conversion # factor to scale PSF to star PSF. For GPI, this is dataset.dn_per_contrast
-    if "sphere" in instrument:
-        try:
-            # Check to see if we have sat spot based psfs in the data dir
-            """hdul = fits.open(data_dir + "psf_satellites_calibrated.fits")
-            calib = hdul[0].data
-            hdul.close()
-            hdul = fits.open(data_dir + "psf_satellites.fits")
-            sats = hdul[0].data
-            hdul.close()"""
-            # Actually, I think if we're using the calibrated psfs, this is already taken care of
-            dn_per_contrast = 1.0#np.mean(np.mean(np.mean(sats[:,:]/calib[:,:],axis=0),axis=1),axis=0)
-        except:
-            # If not, then we just set the max value of our stellar psf as our flux calibration.
-            # This should be scaled by the integration times, but we can do that at the end
-            dn_per_contrast = np.max(dataset.psfs)
-            pass
     #guessspec = np.array(klipcontrast) #your_spectrum # should be 1-D array with number of elements = np.size(np.unique(dataset.wvs))
     # klipcontrast read from residuals below
-    numbasis=[5,10]
+    numbasis=np.array([5,10])
     # initialize the FM Planet PSF class
+    if "sphere" in instrument.lower():
+        dataind = 0 # For some reason the outputs for the fm are different
+        dn_per_contrast = None
+        guesssep = guesssep/1000 / dataset.platescale
+    elif "gpi" in instrument.lower():
+        dn_per_contrast = dataset.dn_per_contrast# your_flux_conversion # factor to scale PSF to star PSF. For GPI, this is dataset.dn_per_contrast
+        dataind = 1
+        guesssep = guesssep/1000 / GPI.GPIData.lenslet_scale
+
     fm_class = fmpsf.FMPlanetPSF(dataset.input.shape, numbasis, guesssep, guesspa, guessflux, dataset.psfs,
                                 np.unique(dataset.wvs), dn_per_contrast, star_spt='A0V',
                                 spectrallib=None)
@@ -111,8 +108,8 @@ def get_astrometry(dataset, PSF_cube, guesssep,guesspa, guessflux, data_dir, pla
     # You should change these to be suited to your data!
     outputdir = data_dir + "pyklip/" # where to write the output files
     prefix = instrument + "_" + planet_name + "_fmpsf" # fileprefix for the output files
-    annulus_bounds = [[guesssep-15, guesssep+15], [60,75]] # one annulus centered on the planet, one for covariance
-    subsections = 10 # we are not breaking up the annulus
+    annulus_bounds = [[guesssep-15, guesssep+15]] # one annulus centered on the planet, one for covariance
+    subsections = 1 # we are not breaking up the annulus
     padding = 0 # we are not padding our zones
     movement = 4 # we are using an conservative exclusion criteria of 4 pixels
     numbasis = [5,10]
@@ -123,18 +120,21 @@ def get_astrometry(dataset, PSF_cube, guesssep,guesspa, guessflux, data_dir, pla
     ### FIT ASTROMETRY ###
     # read in outputs
     output_prefix = os.path.join(outputdir, prefix)
-    fm_hdu = fits.open(output_prefix + "-model-KLmodes-all.fits")
+
+    fm_hdu = fits.open(output_prefix + "-fmpsf-KLmodes-all.fits")
     data_hdu = fits.open(output_prefix + "-klipped-KLmodes-all.fits")
 
     # get FM frame, use KL=7
-    fm_frame = fm_hdu[1].data[1]
-    fm_centx = fm_hdu[1].header['PSFCENTX']
-    fm_centy = fm_hdu[1].header['PSFCENTY']
+    # get FM frame, use KL=7
+
+    fm_frame = fm_hdu[dataind].data[1]
+    fm_centx = fm_hdu[dataind].header['PSFCENTX']
+    fm_centy = fm_hdu[dataind].header['PSFCENTY']
 
     # get data_stamp frame, use KL=7
-    data_frame = data_hdu[1].data[1]
-    data_centx = data_hdu[1].header["PSFCENTX"]
-    data_centy = data_hdu[1].header["PSFCENTY"]
+    data_frame = data_hdu[dataind].data[1]
+    data_centx = data_hdu[dataind].header["PSFCENTX"]
+    data_centy = data_hdu[dataind].header["PSFCENTY"]
 
     # get initial guesses
     guesssep = fm_hdu[0].header['FM_SEP']
@@ -160,14 +160,14 @@ def get_astrometry(dataset, PSF_cube, guesssep,guesspa, guessflux, data_dir, pla
     fit.set_kernel("matern32", [corr_len_guess], [corr_len_label])
     # set bounds
 
-    x_range = 8 # pixels
-    y_range = 15 # pixels
-    flux_range = 2. # flux can vary by an order of magnitude
+    x_range = 3 # pixels
+    y_range = 3 # pixels
+    flux_range = 1. # flux can vary by an order of magnitude
     corr_len_range = 3. # between 0.3 and 30
     fit.set_bounds(x_range, y_range, flux_range, [corr_len_range])
 
     # run MCMC fit
-    fit.fit_astrometry(nwalkers=100, nburn=500, nsteps=2200, numthreads=3)
+    fit.fit_astrometry(nwalkers=200, nburn=500, nsteps=5000, numthreads=numthreads)
     plot_astrometry(fit,data_dir,planet_name)
     if "gpi" in instrument.lower():
         platescale = GPI.GPIData.lenslet_scale*1000

@@ -1,7 +1,9 @@
 import sys,os
+os.environ["OMP_NUM_THREADS"] = "1"
 
 import numpy as np
-
+import matplotlib
+matplotlib.use('Agg') # set the backend before importing pyplot
 import matplotlib.pyplot as plt
 from matplotlib.ticker import StrMethodFormatter
 from matplotlib import rcParams
@@ -38,37 +40,41 @@ def main(args):
     global planet_name
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("path", type=str, default= "/u/nnas/data/", required=True)
-    parser.add_argument("instrument", type=str, default= "GPI", required=True)
-    parser.add_argument("name", type=str, default= "HR8799", required=True)   
-    parser.add_argument("posn", type=int, nargs = "+", required=True)
+    parser.add_argument("path", type=str, default= "/u/nnas/data/")
+    parser.add_argument("instrument", type=str, default= "GPI")
+    parser.add_argument("name", type=str, default= "HR8799")   
+    parser.add_argument("posn", type=float, nargs = "+")
     args = parser.parse_args(args)
 
     data_dir = args.path
     instrument = args.instrument
     planet_name = args.name
-    guesssep, guesspa, guessflux = args.posn
-    if not data_dir.ends_with("/"):
+    guesssep, guesspa = args.posn
+    guessflux = 5e-5
+    if not data_dir.endswith("/"):
         data_dir += "/"
     if not os.path.isdir(data_dir + "andromeda"):
         os.makedirs(data_dir + "andromeda", exist_ok=True)
 
-    stellar_model = np.genfromtxt("/u/nnas/data/data/HR8799/hr8799_star_spec_" + instrument.lower() + "_fullfit_10pc.dat").T
+    stellar_model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_" + instrument.upper() + "_fullfit_10pc.dat").T
 
     science,angles,wlen,psfs = init()
 
     if not os.path.exists(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):
         if "gpi" in instrument.lower():
             dataset = init_gpi(data_dir)
+            pixscale = 0.0162
         elif "sphere" in instrument.lower():
             dataset = init_sphere(data_dir)
+            pixscale = 0.00746
+
         PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
         posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
     else: 
         posn_dict = read_astrometry(data_dir,planet_name)
-        posn = (posn_dict["Px RA offset [px]"], posn_dict["Px DEC offset [px]"])
+        posn = (posn_dict["Px RA offset [px]"][0], posn_dict["Px Dec offset [px]"][0])
     contrasts, snrs = run_andromeda(science,angles,wlen,psfs)
-    aperture_phot_extract(contrasts,(posn[0]+science.shape[2],posn[1]+science.shape[3]))
+    aperture_phot_extract(contrasts,((posn[0]/1000/pixscale)+science.shape[2],posn[1]+science.shape[3]))
     return
 
 def init():
@@ -98,8 +104,8 @@ def init():
     elif "gpi" in instrument.lower():
         pixscale = 0.0162
         science_name = "*distorcorr.fits"
-        psf_name = "*-original_PSF_cube.fits"
-        psfs = fits.open(data_dir + psf_name)[0].data
+        psf_name = glob.glob(data_dir + "*-original_PSF_cube.fits")[0]
+        psfs = fits.open(psf_name)[0].data
 
         filelist = glob.glob(data_dir +science_name)
         dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf)

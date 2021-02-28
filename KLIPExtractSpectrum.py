@@ -1,5 +1,7 @@
 import glob
 import sys,os
+os.environ["OMP_NUM_THREADS"] = "1"
+
 import numpy as np
 import pyklip.instruments.GPI as GPI
 import pyklip.instruments.SPHERE as SPHERE
@@ -10,6 +12,8 @@ import pyklip.fmlib.fmpsf as fmpsf
 import pyklip.fitpsf as fitpsf
 
 import pyklip.parallelized as parallelized
+import matplotlib
+matplotlib.use('Agg') # set the backend before importing pyplot
 import matplotlib.pyplot as plt
 from astropy.io import fits
 from Astrometry import get_astrometry, read_astrometry
@@ -18,7 +22,7 @@ import spectres
 import argparse
 
 ### KLIP Parameters ###
-numbasis = np.array([1,2,3,4,5,8,10,12,15]) # "k_klip", this can be a list of any size.
+numbasis = np.array([2,3,4,5,8,10,12,15]) # "k_klip", this can be a list of any size.
 maxnumbasis = 20 # Max components to be calculated
 movement = 2.0 # aggressiveness for choosing reference library
 stamp_size = 11 # how big of a stamp around the companion in pixels
@@ -28,8 +32,9 @@ distance = 41.2925 #pc
 data_dir = "/u/nnas/data/"
 instrument = "GPI"
 planet_name = "HR8799"
-numthreads = 35
+numthreads = 11
 pxscale = 0.01422
+
 def main(args):
     sys.path.append(os.getcwd())
 
@@ -37,23 +42,23 @@ def main(args):
     global instrument
     global planet_name
     parser = argparse.ArgumentParser()
-    parser.add_argument("path", type=str, default= "/u/nnas/data/", required=True)
-    parser.add_argument("instrument", type=str, default= "GPI", required=True)
-    parser.add_argument("name", type=str, default= "HR8799", required=True)   
-    parser.add_argument("posn", type=int, nargs = "+", required=True)
+    parser.add_argument("path", type=str, default= "/u/nnas/data/")
+    parser.add_argument("instrument", type=str, default= "GPI")
+    parser.add_argument("name", type=str, default= "HR8799")   
+    parser.add_argument("posn", type=float, nargs = "+")
     args = parser.parse_args(args)
 
     data_dir = args.path
     instrument = args.instrument
     planet_name = args.name
-    guesssep, guesspa, guessflux = args.posn
-
-    if not data_dir.ends_with("/"):
+    guesssep, guesspa = args.posn
+    guessflux = 5e-5
+    if not data_dir.endswith("/"):
         data_dir += "/"
     if not os.path.isdir(data_dir + "pyklip"):
         os.makedirs(data_dir + "pyklip", exist_ok=True)
 
-    stellar_model = np.genfromtxt("/u/nnas/data/data/HR8799/hr8799_star_spec_" + instrument.lower() + "_fullfit_10pc.dat").T
+    stellar_model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_" + instrument.upper() + "_fullfit_10pc.dat").T
 
     if "gpi" in instrument.lower():
         dataset = init_gpi()
@@ -63,10 +68,10 @@ def main(args):
         pxscale = 0.007462
     PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
     if not os.path.exists(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):
-        posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
+        posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, planet_name)
     else: 
         posn_dict = read_astrometry(data_dir,planet_name)
-        posn = (posn_dict["Separation [mas]"]/pxscale/1000, posn_dict["PA [deg]"])
+        posn = (posn_dict["Separation [mas]"][0], posn_dict["PA [deg]"][0])
     exspect, fm_matrix = KLIP_Extraction(dataset, PSF_cube, posn, numthreads)
     contrasts,flux = get_spectrum(dataset, exspect, stellar_model, spot_to_star_ratio)
     return
@@ -89,7 +94,9 @@ def init_gpi():
     # GPI
     # Original files 131117,131118,160919
     # PynPoint structure GPIH, GPIK1, GPIK2
-    psf = fits.open(data_dir  + "*original_PSF_cube.fits")[0].data
+    psf_name = glob.glob(data_dir + "*_PSF_cube.fits")[0]
+
+    psf = fits.open(psf_name)[0].data
     if not os.path.isdir(data_dir + "pyklip"):
         os.makedirs(data_dir + "pyklip", exist_ok=True) 
 
@@ -120,24 +127,22 @@ def init_psfs(dataset):
     spot_peak_spectrum = \
         np.median(dataset.spot_flux.reshape(len(dataset.spot_flux)//nl, nl), axis=0)
     calibfactor = np.array(aper_over_peak_ratio*spot_peak_spectrum / spot_to_star_ratio)
-    print(calibfactor)
     # calibrated_PSF_model is the stellar flux in counts for each wavelength
     calibrated_PSF_model = calibfactor[:,None,None]*PSF_cube
     return PSF_cube, calibrated_PSF_model, spot_to_star_ratio
 
 def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
     planet_sep, planet_pa = posn
-    subsections = [[(planet_pa+(4.0*i*stamp_size)-2.0*stamp_size)/180.*np.pi,\
-                    (planet_pa+(4.0*i*stamp_size)+2.0*stamp_size)/180.*np.pi] for i in range(sections)]
-
+    planet_sep =planet_sep/1000 / pxscale
+    subsections = 10#[[(planet_pa+(4.0*i*stamp_size)-2.0*stamp_size)/180.*np.pi,\
+                    #(planet_pa+(4.0*i*stamp_size)+2.0*stamp_size)/180.*np.pi] for i in range(sections)]
     #num_k_klip = len(numbasis) # how many k_klips running
     N_frames = len(dataset.input)
     N_cubes = np.size(np.unique(dataset.filenums))
     #nl = N_frames // N_cubes
-
     spectra_template = None #np.tile(np.array(exspect[i]),N_cubes)
-
-
+    print(planet_sep,planet_pa)
+    print(dataset.input.shape,numbasis,PSF_cube.shape)
     ###### The forward model class ######
     fm_class = es.ExtractSpec(dataset.input.shape,
                         numbasis,
@@ -146,7 +151,7 @@ def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
                         PSF_cube,
                         np.unique(dataset.wvs),
                         stamp_size = stamp_size,
-                        datatype = 'double')
+                        datatype = 'float')
 
     ###### Now run KLIP! ######
     fm.klip_dataset(dataset, fm_class,
