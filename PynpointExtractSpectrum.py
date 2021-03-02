@@ -52,7 +52,7 @@ data_dir = "/u/nnas/data/HR8799/HR8799_AG_reduced/GPIK2/" #SPHERE-0101C0315A-20/
 instrument = "GPI"
 planet_name = "HR8799e" # Name to give to all outputs
 distance = 41.2925 #pc
-pcas = [3,4,5,8,10,12,15,20]
+pcas = [4,5,6,8,10,12,15,20]
 fwhm = 3.5*0.01414 # fwhm will be recalculated
 pixscale = 0.00746 # pixscale is updated depending on instrument
 numthreads = 15 # Not important, read from config file
@@ -132,7 +132,7 @@ def main(args):
 
     # read_astrometry gives offsets in x,y, need to compute absolute posns
     posn_dict = read_astrometry(data_dir,planet_name)
-    posn = (-1*posn_dict["Px RA offset [px]"][0], posn_dict["Px Dec offset [px]"][0])
+    posn = (-1*posn_dict["Px RA offset [px]"][0], -1*posn_dict["Px Dec offset [px]"][0])
     posn_pyn = (posn[0] + data_shape[-2]/2.0,posn[1]+data_shape[-1]/2.0)
 
     # Sanity chec the posn
@@ -455,8 +455,8 @@ def preproc_files():
             hdu.header['NAXIS3'] = science.shape[1]
             hdu.header['CDELT3'] = np.mean(np.diff(dataset.PAs.reshape(len(filelist),37)[:,0]))
             hdu.header['WAVELENGTH'] = dataset.wvs[channel]
-            hdu.header['ESO ADA POSANG'] = dataset.PAs.reshape(len(filelist),37)[:,0][0]
-            hdu.header['ESO ADA POSANG END'] = dataset.PAs.reshape(len(filelist),37)[:,0][-1]
+            hdu.header['ESO ADA POSANG'] = (dataset.PAs.reshape(len(filelist),37)[:,0][0]+ 180.0)
+            hdu.header['ESO ADA POSANG END'] = (dataset.PAs.reshape(len(filelist),37)[:,0][-1]+ 180.0 )
             hdul_new = fits.HDUList([hdu])
             hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + str(channel).zfill(3) + '_reduced.fits',overwrite=True)
             header_hdul.close()
