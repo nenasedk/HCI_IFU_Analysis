@@ -473,8 +473,8 @@ def preproc_files():
         hdu.header['NAXIS4'] = science.shape[0] # WLEN
         hdu.header['CDELT3'] = np.mean(np.diff(dataset.PAs.reshape(len(filelist),37)[:,0]))
         hdu.header['CDELT4'] = np.mean(np.diff(dataset.wvs[:37]))
-        hdu.header['ESO ADA POSANG'] = (dataset.PAs.reshape(len(filelist),37)[:,0][0]- 90.0 + dataset.ifs_rotation)
-        hdu.header['ESO ADA POSANG END'] = (dataset.PAs.reshape(len(filelist),37)[:,0][-1]- 90.0 + dataset.ifs_rotation)
+        hdu.header['ESO ADA POSANG'] = (dataset.PAs.reshape(len(filelist),37)[:,0][0]+ 180.0)
+        hdu.header['ESO ADA POSANG END'] = (dataset.PAs.reshape(len(filelist),37)[:,0][-1]+ 180.0 )
         hdul_new = fits.HDUList([hdu])
         hdul_new.writeto(data_dir + "HR8799_"+instrument + '_science_full.fits', overwrite = True)
         header_hdul.close()
@@ -510,7 +510,7 @@ def preproc_files():
 
         # pyklip does weird things with the PAs, so let's fix that.
         # Keep or remove dataset.ifs_rotation? GPI IFS is rotated 23.5 deg, 
-        pas = (dataset.PAs.reshape(len(filelist),37)[:,0] + 90.0 + dataset.ifs_rotation)
+        pas = (dataset.PAs.reshape(len(filelist),37)[:,0] + 180.0)
         hdu = fits.PrimaryHDU(pas)
         hdul_new = fits.HDUList([hdu])
         hdul_new.writeto(data_dir + "parangs.fits",overwrite = True)
