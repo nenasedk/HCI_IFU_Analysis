@@ -1,59 +1,72 @@
+# Author: Evert Nasedkin
+# email: nasedkinevert@gmail.com
+
 import sys,os
 import shutil
 os.environ["OMP_NUM_THREADS"] = "1"
 import glob
+import argparse
 import numpy as np
+
+# Weird matplotlib imports for cluster use
 import matplotlib
 matplotlib.use('Agg') # set the backend before importing pyplot
 import matplotlib.pyplot as plt
 from matplotlib.ticker import StrMethodFormatter
 from matplotlib import rcParams
 from matplotlib import rc
-rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
-#rc('font',**{'family':'serif','serif':['Palatino']})
-rc('text', usetex=True)  
 
 from astropy.io import fits
-from scipy.ndimage import rotate
 from photutils import CircularAperture, CircularAnnulus, aperture_photometry
 from typing import List, Optional, Tuple
+
+# My own files
 from Astrometry import get_astrometry, read_astrometry, init_sphere, init_gpi, set_psfs
+
+# Exoplanet stuff
+import pyklip.instruments.GPI as GPI
 import vip_hci as vip
 from vip_hci.preproc import cube_recenter_2dfit, cube_recenter_dft_upsampling
-import argparse
-import pyklip.instruments.GPI as GPI
-
 from pynpoint import Pypeline, \
                      FitsReadingModule,\
                      ParangReadingModule,\
-                     Hdf5ReadingModule, \
-                     PSFpreparationModule, \
                      PcaPsfSubtractionModule,\
                      AttributeReadingModule, \
-                     DerotateAndStackModule, \
                      BadPixelSigmaFilterModule,\
-                     ReplaceBadPixelsModule,\
-                     FrameSelectionModule,\
-                     WaffleCenteringModule,\
-                     CropImagesModule,\
                      SimplexMinimizationModule,\
-                     StarAlignmentModule,\
-                     ShiftImagesModule,\
                      WavelengthReadingModule
 
-data_dir = "/u/nnas/data/HR8799/HR8799_AG_reduced/GPIK2/" #SPHERE-0101C0315A-20/channels/
-instrument = "GPI"
-planet_name = "HR8799e"
+# Matplotlib styling
+rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
+rc('text', usetex=True)  
 
+# Data dir must contain ALL files
+# This means: science cubes (wlen,nframes,x,y)
+#             psf cubes
+#             wavelength
+#             parangs
+# There is a preprocessing function to help sort everything into the correct formats (GPI and SPHERE)
+data_dir = "/u/nnas/data/HR8799/HR8799_AG_reduced/GPIK2/" #SPHERE-0101C0315A-20/channels/
+
+# Instrument name, and optionally the band (ie GPIH, SPHEREYJ)
+instrument = "GPI"
+planet_name = "HR8799e" # Name to give to all outputs
 distance = 41.2925 #pc
 pcas = [3,4,5,8,10,12,15,20]
-fwhm = 3.5*0.01414 #0.134
-pixscale = 0.00746
-numthreads = 15
-DIT_SCIENCE = 64.0
-DIT_FLUX = 4.0
+fwhm = 3.5*0.01414 # fwhm will be recalculated
+pixscale = 0.00746 # pixscale is updated depending on instrument
+numthreads = 15 # Not important, read from config file
+
+DIT_SCIENCE = 64.0 # Set with argparse
+DIT_FLUX = 4.0 # Set with argparse
+NORMFACTOR = 1.0 # updated based on instrument and/or DITS
 
 def main(args):
+    """
+    This script will produce residuals and contrasts using Pynpoint for
+    an IFU dataset
+    """
+    # necessary for running in cluster
     sys.path.append(os.getcwd())
 
     global data_dir 
@@ -81,7 +94,7 @@ def main(args):
     instrument = args.instrument
     planet_name = args.name
     guesssep, guesspa = args.posn
-    guessflux=5e-5
+    guessflux=5e-5 # as long as it's within an order of magnitude or so it's fine
     base_name = "HR8799_" + instrument
     if args.ditscience is not None:
         DIT_SCIENCE = args.ditscience
@@ -114,23 +127,29 @@ def main(args):
         elif "sphere" in instrument.lower():
             dataset = init_sphere(data_dir)
         PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
+        # posn is in sep [mas] and PA [degree], we need offsets in x and y px
         posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
-        posn_pyn = (posn[0]/1000/pixscale + data_shape[-2]/2.0,posn[1]+data_shape[-1]/2.0)
-    else: 
-        posn_dict = read_astrometry(data_dir,planet_name)
-        posn = (-1*posn_dict["Px RA offset [px]"][0], posn_dict["Px Dec offset [px]"][0])
-        posn_pyn = (posn[0] + data_shape[-2]/2.0,posn[1]+data_shape[-1]/2.0)
+
+    # read_astrometry gives offsets in x,y, need to compute absolute posns
+    posn_dict = read_astrometry(data_dir,planet_name)
+    posn = (-1*posn_dict["Px RA offset [px]"][0], posn_dict["Px Dec offset [px]"][0])
+    posn_pyn = (posn[0] + data_shape[-2]/2.0,posn[1]+data_shape[-1]/2.0)
+
+    # Sanity chec the posn
+    print(posn_pyn)
 
     # Run ADI for each channel individually
     run_all_channels(nChannels,
                  base_name,
                  instrument + "_" + planet_name,
                  posn_pyn)
+
     # Save outputs to numpy arrays
     contrasts = save_contrasts(nChannels,
                             base_name,
                             data_dir + "pynpoint/",
                             instrument + "_" + planet_name)
+
     # Use stellar model to convert to flux units
     save_flux(contrasts)
 
@@ -143,6 +162,7 @@ def save_residuals(residuals,name,output_place):
 
 # Do a full ADI + SDI analysis to check that inputs work correctly
 def test_analysis(input_name,psf_name,output_name,posn,working_dir,waffle = False):
+    # 
     set_fwhm(0)
     test_pipeline = Pypeline(working_place_in=working_dir,
                         input_place_in=data_dir,
@@ -182,21 +202,21 @@ def test_analysis(input_name,psf_name,output_name,posn,working_dir,waffle = Fals
                                  data_tag = 'science',
                                  overwrite=True)
     test_pipeline.add_module(module)
-
-
+    
     module = PcaPsfSubtractionModule(name_in = "test_analysis",
                                      images_in_tag = "science",
                                      reference_in_tag = "science",
                                      res_median_tag = "median",
-                                     pca_numbers = ([5,10],[5,10]),
-                                     processing_type = "ADI+SDI")
+                                     pca_numbers = [1,3,5,8,10,12,20],
+                                     processing_type = "ADI",
+                                     )
     test_pipeline.add_module(module)
     test_pipeline.run()
     residuals = test_pipeline.get_data("median")
-    save_residuals(residuals[-1],output_name +"_residuals_ADISDI", data_dir+ "pynpoint/" )
+    save_residuals(residuals,output_name +"_residuals_ADISDI", data_dir+ "pynpoint/" )
 
 # Run Simplex minimization on a single channel to get the contrast
-def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir,waffle = False):
+def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir):
     set_fwhm(channel)
     pipeline = Pypeline(working_place_in=working_dir,
                         input_place_in=data_dir,
@@ -261,17 +281,17 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
                                        tolerance = 0.005, # tighter tolerance is good
                                        pca_number = pcas, #listed above
                                        cent_size = 0.15, # how much to block out 
-                                       offset = 0.0) #use fixed astrometry from KLIP
+                                       offset = 1.0) #use fixed astrometry from KLIP
 
     pipeline.add_module(module)
     pipeline.run()
     for pca in pcas:
-        flux = pipeline.get_data('flux_pos_channel_' + channel + "_" + str(pca))
-        np.savetxt(data_dir+ "pynpoint/" + output_name + "_ch" + channel +"_flux_pos_out_pca_" +str(pca)+ ".dat",flux)
-        residuals = pipeline.get_data('flux_channel_' + channel + "_" + str(pca))
-        save_residuals(residuals[-1],output_name +"_residuals_" + channel + "_pca_" + str(pca), data_dir+ "pynpoint/" )
+        flux = pipeline.get_data('flux_pos_channel_' + str(channel).zfill(3) + "_" + str(pca).zfill(3))
+        np.savetxt(data_dir+ "pynpoint/" + output_name + "_ch" + str(channel).zfill(3) +"_flux_pos_out_pca_" +str(pca)+ ".dat",flux)
+        residuals = pipeline.get_data('flux_channel_' + str(channel).zfill(3) + "_" + str(pca).zfill(3))
+        save_residuals(residuals[-1],output_name +"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca), data_dir+ "pynpoint/" )
 
-# Loop over all channels to get spectrum
+# Run Pynpoint
 def run_all_channels(nchannels, base_name, output_name, posn):
     if "sphere" in instrument.lower():
         # use 'frames removed' files
@@ -279,42 +299,65 @@ def run_all_channels(nchannels, base_name, output_name, posn):
     elif "gpi" in instrument.lower():
         # reshape data into a single file to read in for correct shape
         test_analysis("*science_full.fits","*_PSF.fits",output_name,posn,data_dir)
+
+    # Loop over all channels
     for channel in range(nchannels):
         working_dir = data_dir + "pynpoint/CH" + str(channel).zfill(3) +"/"
+
+        # Have to copy the config file to the working dir 
+        # Using separate dirs to get unique databases for each wavelength
+        # Might be unnecessary, but then I don't have a 50GB hdf5 file to deal with
         if not os.path.isdir(working_dir):
             os.makedirs(working_dir, exist_ok=True) 
         if "sphere" in instrument.lower():
             shutil.copy("config/Pynpoint_config_SPHERE.ini", working_dir + "PynPoint_config.ini")
         elif "gpi" in instrument.lower():
             shutil.copy("config/Pynpoint_config_GPI.ini", working_dir + "PynPoint_config.ini")
+        
+        # Naming everything consistently
+        # Channel must be zfilled for sorting 
+        # Better option would be using fits headers, but that's a pain.
         name = base_name +"_" + str(channel).zfill(3) + '_reduced.fits'
         psf_name = base_name +"_" + str(channel).zfill(3) + '_PSF.fits'
         output_place = data_dir+"pynpoint/"
         if os.path.isfile(working_dir + "PynPoint_database.hdf5"):
             os.remove(working_dir + "PynPoint_database.hdf5")
+
+        # Run Simplex Minimization module in pynpoint
         simplex_one_channel(str(channel).zfill(3),name,psf_name,output_name,posn,working_dir)
 
     # Save residuals to a more manageable file
-    residuals = []
+    residuals = [] #pynpoint mag units
+    contrasts = [] #in actual contrast units, only needs stellar spectrum normalization
     for pca in pcas:
         rpcas = []
+        contrast = []
         for channel in range(nchannels):
             hdul = fits.open(data_dir + "pynpoint/"+output_name+"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca)+".fits")
             data = hdul[0].data
             rpcas.append(data)
+            contrast.append(np.power(10.0,data/-2.5)*NORMFACTOR)
             hdul.close()
         rpcas = np.array(rpcas)
+        contrast = np.array(contrast)
         residuals.append(rpcas)
+        contrasts.append(contrast)
+    residuals = np.array(residuals)
+    contrasts = np.array(contrasts)
+
+    # Write residuals in magnitude units
     hdu = fits.PrimaryHDU(residuals)
+    hdul = fits.HDUList([hdu])
+    hdul.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_magnitudes.fits',overwrite = True)
+
+    # Write contrast in contrast units (surprise)
+    hdu = fits.PrimaryHDU(contrasts)
     hdul = fits.HDUList([hdu])
     hdul.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_residuals.fits',overwrite = True)
 
 # Save contrasts to a useable array
 def save_contrasts(nchannels,base_name,output_place,output_name):
-    whdul = fits.open(data_dir + "wavelength.fits")
-    wlen = whdul[0].data/1000
-    print(wlen)
-    contrasts = []
+    contrasts = [] # the contrast of the planet itself
     for pca in pcas:
         contrast = []
         for channel in range(nchannels):
@@ -322,45 +365,27 @@ def save_contrasts(nchannels,base_name,output_place,output_name):
             contrast.append(samples[-1][4])
         contrasts.append(contrast)
     cont = np.array(contrasts)
-    np.save(output_place + output_name +  "contrasts",cont)
+    np.save(output_place + output_name +  "contrasts",cont) # saved in magnitude units
     return cont
 
 # Normalize with stellar flux
 def save_flux(contrasts):
-    whdul = fits.open(data_dir + "wavelength.fits")
-    wlen = whdul[0].data/1000
     stellar_model = np.genfromtxt("/Users/nasedkin/data/HR8799/stellar_model/hr8799_star_spec_"+ instrument.upper() +"_fullfit_10pc.dat").T
     fluxes = []
     for i in range(len(pcas)):
-        fluxes.append(stellar_model[1]*10**((contrasts[i])/-2.5)* DIT_SCIENCE/DIT_FLUX)
+        fluxes.append(stellar_model[1]*10**((contrasts[i])/-2.5)* NORMFACTOR)
     fluxes = np.array(fluxes)
-    np.save(data_dir + "pynpoint/" + instrument + "_" + planet_name + "_flux",fluxes)
-
-# Get the PSF FWHM for each channel
-def set_fwhm(channel):
-    if "sphere" in instrument.lower():
-        psf_name = data_dir + "psf_satellites_calibrated.fits"
-    elif "gpi" in instrument.lower():
-        psf_name = glob.glob(data_dir + "*-original_PSF_cube.fits")[0]
-    hdul = fits.open(psf_name)
-    psfs = hdul[0].data
-    print(psfs.shape)
-    global fwhm
-    if len(psfs.shape) ==4 :
-        fwhm_fit = vip.var.fit_2dgaussian(psfs[int(channel),0], crop=True, cropsize=11, debug=False)
-    else:
-        fwhm_fit = vip.var.fit_2dgaussian(psfs[int(channel)], crop=True, cropsize=11, debug=False)
-
-    fwhm = np.mean(np.array([fwhm_fit['fwhm_y'],fwhm_fit['fwhm_x']]))*pixscale # fit for fwhm
-    hdul.close()
-    return
+    np.save(data_dir + "pynpoint/" + instrument + "_" + planet_name + "_flux",fluxes) # Saved in W/m2/micron at 10pc
 
 # Reshape science and PSF files for PCA, 
 def preproc_files():
+    global NORMFACTOR
+    # If everything is already processed, continue.
     if os.path.exists(data_dir + "HR8799_"+instrument+"_000_reduced.fits"):
         hdul = fits.open(data_dir + "HR8799_"+instrument+"_000_reduced.fits")
         cube = hdul[0].data
         return cube.shape
+
     data_shape = None
     if "sphere" in instrument.lower():
         science_name = "frames_removed.fits"
@@ -368,8 +393,13 @@ def preproc_files():
 
         hdul = fits.open(data_dir + science_name)
         cube = hdul[0].data
+        NORMFACTOR = DIT_SCIENCE/DIT_FLUX
+
+        # Data shape is used to calculate image center, so it's returned
         if data_shape is None:
             data_shape = cube.shape
+        # Separate full cube into wavelength channels
+        # SimplexMinimization doesn't work on IFU data naturally
         for channel,frame in enumerate(cube[:]):
             hdu = fits.PrimaryHDU(frame)
             hdul_new = fits.HDUList([hdu])
@@ -377,45 +407,83 @@ def preproc_files():
         hdul.close()
         hdul = fits.open(data_dir + psf_name)
         cube = hdul[0].data
+
+        # Individual PSFs
         for channel,frame in enumerate(cube[:]):
             hdu = fits.PrimaryHDU(frame)
             hdul_new = fits.HDUList([hdu])
             hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + str(channel).zfill(3) + '_PSF.fits',overwrite = True)
+
     elif "gpi" in instrument.lower():
         science_name = "*distorcorr.fits"
         psf_name = glob.glob(data_dir + "*-original_PSF_cube.fits")[0]
         psf_hdul = fits.open(psf_name)
         psfs = psf_hdul[0].data
 
-        filelist = glob.glob(data_dir +science_name)
-        dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psfs)
+        # Filelist MUST be sorted for PAs and frames to be in correct order for pynpoint
+        # Assuming standard GPI naming scheme
+        filelist = sorted(glob.glob(data_dir +science_name))
+        dataset = GPI.GPIData(filelist, highpass=True, PSF_cube = psfs,recalc_centers=True)
+        dataset.generate_psf_cube(41)
+
+        band = dataset.prihdrs[0]['APODIZER'].split('_')[1]
+        spot_to_star_ratio = dataset.spot_ratio[band]
+        NORMFACTOR = spot_to_star_ratio
 
         # Need to order the GPI data for pynpoint
         shape = dataset.input.shape
-        science = dataset.input.reshape(37,len(filelist),shape[-2],shape[-1])
+        science = dataset.input.reshape(len(filelist),37,shape[-2],shape[-1])
+        science = np.swapaxes(science,0,1)
         science_pyn = []
-        print(shape,science.shape)
+        if data_shape is None:
+                data_shape = science.shape
         for channel,frame in enumerate(science[:]):
-            if data_shape is None:
-                data_shape = frame.shape
-            shiftx,shifty = (frame.shape[-2]/2.0 - dataset.centers[channel][0],frame.shape[-1]/2.0 - dataset.centers[channel][1])
+            # The PSF center isn't aligned with the image center, so let's fix that
+            centx = dataset.centers.reshape(len(filelist),37,2)[:,channel,0]
+            centy = dataset.centers.reshape(len(filelist),37,2)[:,channel,1]
+            shiftx,shifty = (int((frame.shape[-2]/2))*np.ones_like(centx) - centx,
+                             (int(frame.shape[-1]/2))*np.ones_like(centy) - centy)
             shifted = vip.preproc.recentering.cube_shift(frame,shiftx,shifty)
-            header_hdul = fits.open(filelist[channel])
+
+            # Copy the GPI header, and add some notes of our own
+            header_hdul = fits.open(filelist[0])
+            # Save channel by channel files
             hdu = fits.PrimaryHDU(shifted)
             hdu.header = header_hdul[0].header
+            hdu.header.update(header_hdul[1].header)
+            hdu.header['NDIT'] = science.shape[1] 
+            hdu.header['NAXIS3'] = science.shape[1]
+            hdu.header['CDELT3'] = np.mean(np.diff(dataset.PAs.reshape(len(filelist),37)[:,0]))
+            hdu.header['WAVELENGTH'] = dataset.wvs[channel]
+            hdu.header['ESO ADA POSANG'] = dataset.PAs.reshape(len(filelist),37)[:,0][0]
+            hdu.header['ESO ADA POSANG END'] = dataset.PAs.reshape(len(filelist),37)[:,0][-1]
             hdul_new = fits.HDUList([hdu])
             hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + str(channel).zfill(3) + '_reduced.fits',overwrite=True)
             header_hdul.close()
 
+            # Save for a full file, not channel by channel
             science_pyn.append(shifted)
+        # Save the full file (wlens,nframes,x,y)
         hdu = fits.PrimaryHDU(np.array(science_pyn))
         header_hdul = fits.open(filelist[0])
         hdu.header = header_hdul[0].header
-        header_hdul.close()
+        hdu.header.update(header_hdul[1].header)
+        hdu.header['NDIT'] = science.shape[1]
+        hdu.header['NAXIS3'] = science.shape[1] # Time/PA
+        hdu.header['NAXIS4'] = science.shape[0] # WLEN
+        hdu.header['CDELT3'] = np.mean(np.diff(dataset.PAs.reshape(len(filelist),37)[:,0]))
+        hdu.header['CDELT4'] = np.mean(np.diff(dataset.wvs[:37]))
+        hdu.header['ESO ADA POSANG'] = (dataset.PAs.reshape(len(filelist),37)[:,0][0]- 90.0 + dataset.ifs_rotation)
+        hdu.header['ESO ADA POSANG END'] = (dataset.PAs.reshape(len(filelist),37)[:,0][-1]- 90.0 + dataset.ifs_rotation)
         hdul_new = fits.HDUList([hdu])
-        hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + '_science_full.fits')
-        for channel,frame in enumerate(psfs):
+        hdul_new.writeto(data_dir + "HR8799_"+instrument + '_science_full.fits', overwrite = True)
+        header_hdul.close()
+
+        # Repeat the exercise for the PSFs
+        for channel,frame in enumerate(dataset.psfs):
             if frame.shape[-1] != science.shape[-1]:
+                # PSF must be the same size and shape as the science data
+                # Stupid.
                 padx = int((science.shape[-1] - frame.shape[0])/2.)
                 pady = int((science.shape[-2] - frame.shape[1])/2.)
                 if (frame.shape[0] + (2 * padx))%2 == 0:
@@ -435,12 +503,18 @@ def preproc_files():
             hdu.header = psf_hdul[0].header
             hdul_new = fits.HDUList([hdu])  
             hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + str(channel).zfill(3) + '_PSF.fits',overwrite = True)
+        # Save wavelengths
         hdu = fits.PrimaryHDU(dataset.wvs[:37])
         hdul_new = fits.HDUList([hdu])
         hdul_new.writeto(data_dir + "wavelength.fits",overwrite = True)
-        hdu = fits.PrimaryHDU(dataset.PAs[:len(filelist)])
+
+        # pyklip does weird things with the PAs, so let's fix that.
+        # Keep or remove dataset.ifs_rotation? GPI IFS is rotated 23.5 deg, 
+        pas = (dataset.PAs.reshape(len(filelist),37)[:,0] + 90.0 + dataset.ifs_rotation)
+        hdu = fits.PrimaryHDU(pas)
         hdul_new = fits.HDUList([hdu])
         hdul_new.writeto(data_dir + "parangs.fits",overwrite = True)
+        del dataset
     return data_shape
 
 ###########
@@ -504,5 +578,27 @@ def reshape_psf(filename):
     hdul.close()
     return psfs
 
+# Get the PSF FWHM for each channel
+def set_fwhm(channel):
+    # TODO: Not really using FWHM anywhere, will probably delete all references to it
+    if "sphere" in instrument.lower():
+        psf_name = data_dir + "psf_satellites_calibrated.fits"
+    elif "gpi" in instrument.lower():
+        psf_name = glob.glob(data_dir + "*-original_PSF_cube.fits")[0]
+    hdul = fits.open(psf_name)
+    psfs = hdul[0].data
+    global fwhm
+    if len(psfs.shape) ==4 :
+        fwhm_fit = vip.var.fit_2dgaussian(psfs[int(channel),0], crop=True, cropsize=11, debug=False)
+    else:
+        fwhm_fit = vip.var.fit_2dgaussian(psfs[int(channel)], crop=True, cropsize=11, debug=False)
+
+    fwhm = np.mean(np.array([fwhm_fit['fwhm_y'],fwhm_fit['fwhm_x']]))*pixscale # fit for fwhm
+    hdul.close()
+    return
+
+#################
+# Run the script!
+#################
 if __name__ == '__main__':
     main(sys.argv[1:])

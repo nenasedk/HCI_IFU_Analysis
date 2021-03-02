@@ -19,9 +19,8 @@ from astropy.io import fits
 import spectres
 
 instrument = "GPI"
-numthreads = 35
+numthreads = 8
 
-#def klipData(dataset,data_dir,output_dir):
 def init_sphere(data_dir):
     global instrument
     instrument = "SPHERE"

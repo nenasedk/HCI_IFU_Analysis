@@ -65,6 +65,11 @@ def create_circular_mask(h, w, center=None, radius=None):
     return mask
 
 def get_covariance(contrast,posn_dict,nl,npca=None):
+    center = (contrasts.shape[-2]/2,contrasts.shape[-1]/2.0)
+    width = 7
+    r_in = posn_dict['Separation [mas]'][0]/1000/pxscale - width
+    r_out = posn_dict['Separation [mas]'][0]/1000/pxscale + width
+    annulus_c = CircularAnnulus(center,r_in = r_in, r_out = r_out)
     if npca is not None:
         cors = []
         for j in range(npca):
@@ -78,7 +83,7 @@ def get_covariance(contrast,posn_dict,nl,npca=None):
                                             radius = posn_dict["Separation [mas]"]/1000*pxscale)
                 
                 # Get fluxes of all pixels within annulus
-                annulus = annulus_c_list[i].to_mask(method='center')[0]
+                annulus = annulus_c.to_mask(method='center')[0]
                 flux = annulus.multiply(mask*med)[annulus.data>0]
                 fluxes.append(fluxes)
             fluxes = np.array(fluxes)
@@ -105,7 +110,7 @@ def get_covariance(contrast,posn_dict,nl,npca=None):
                                         radius = posn_dict["Separation [mas]"]/1000*pxscale)
             
             # Get fluxes of all pixels within annulus
-            annulus = annulus_c_list[i].to_mask(method='center')[0]
+            annulus = annulus_c.to_mask(method='center')[0]
             flux = annulus.multiply(mask*med)[annulus.data>0]
             fluxes.append(fluxes)
         fluxes = np.array(fluxes)
@@ -119,7 +124,7 @@ def get_covariance(contrast,posn_dict,nl,npca=None):
         np.save(data_dir + instrument + "_" + planet_name + "_covariance",cor)
         return cor
 
-def normalize_errors(contrasts):
+def normalize_errors(contrasts,nl,npca=None):
     # load in full residual file
     # use annulus far from center
     # get std of each aperture in contrast units
@@ -129,8 +134,105 @@ def normalize_errors(contrasts):
     # extract from background, compute SNR
     # add errors in quadrature
     # save as array with dims (npca,nl)
+    if "gpi" in instrument.lower():
+        loc = 1200.
+    elif "sphere" in instrument.lower():
+        loc = 750.
+    center = (contrasts.shape[-2]/2,contrasts.shape[-1]/2.0)
+    width = 7
+    r_in = loc/1000/pxscale - width
+    r_out = loc/1000/pxscale + width
+    annulus_c = CircularAnnulus(center,r_in = r_in, r_out = r_out)
+    stellar_model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_" + instrument.upper() + "_fullfit_10pc.dat").T
+
+    # Get stellar PSF
+    # Must be at least 30 px wide (for background error)
+    if instrument.lower() == "sphereyj":
+        psf_cube = fits.open(glob.glob(data_dir + psf_name)[0])
+        psf_cube = np.nanmean(psf_cube,axis=1)
+    elif instrument.lower() == "sphereyjh":
+        psf_cube = fits.open(glob.glob(data_dir + psf_name)[0])
+    elif "gpi" in instrument.lower():
+        psf_name = glob.glob(data_dir + "*_PSF_cube.fits")[0]
+        psf = fits.open(psf_name)[0].data
+        if not os.path.isdir(data_dir + "pyklip"):
+            os.makedirs(data_dir + "pyklip", exist_ok=True) 
+
+        filelist = sorted(glob.glob(data_dir +"*distorcorr.fits"))
+        dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True)
+        dataset.generate_psf_cube(41)
+        psf_cube = dataset.psfs
     
+    # Fractional error on stellar psf
+    phot_err = photometric_error(psf_cube)
+    if npca is not None:
+        cors = []
+        for j in range(npca):
+            fluxes = []
+            for i in range(nl):
+                # Stack and median subtract
+                med = contrast[j,i]
+                # Mask out planet (not sure if correct location)
+                # Get fluxes of all pixels within annulus
+                annulus = annulus_c.to_mask(method='center')[0]
+                flux = annulus.multiply(med)[annulus.data>0]*stellar_model[i]
+                fluxes.append(fluxes)
+            fluxes = np.array(fluxes)
+            error = np.std(fluxes,axis=0) # THE FLUX ERROR IN THE RESIDUALS
+        
+           
+        return cors
+
+
+    else:
+        fluxes = []
+        for i in range(nl):
+            # Stack and median subtract
+            med = contrast[i]
+            # Mask out planet (not sure if correct location)
+            # Get fluxes of all pixels within annulus
+            annulus = annulus_c.to_mask(method='center')[0]
+            flux = annulus.multiply(med)[annulus.data>0]
+            fluxes.append(fluxes)
+        fluxes = np.array(fluxes)
+        cor = np.zeros((fluxes.shape[0],fluxes.shape[0]))
+        for m in range(fluxes.shape[0]):
+            for n in range(fluxes.shape[0]):
+                top =    np.mean(np.dot(fluxes[m],fluxes[n]))
+                bottom = np.sqrt(np.mean(np.dot(fluxes[m],fluxes[m]))*np.mean(np.dot(fluxes[n],fluxes[n])))
+                #print(top,bottom)
+                cor[i,j] = top/bottom
+        np.save(data_dir + instrument + "_" + planet_name + "_covariance",cor)
+        return cor
     return
 
+def photometric_error(psf_cube):
+    # psf_cube has shape (wlen,x,y)
+    # Get the relative photometric error 
+    # Hardcoded: photometric aperture of 4px radius
+    #            noise annulus between 9-16px radii
+    #            different npix is accounted for
+    std = []
+    flux = []
+    for frame in psf_cube[:]:
+        y_img, x_img = np.indices(frame.shape, dtype=float)
+        r_img = np.sqrt((x_img - frame.shape[0]/2.0)**2 + (y_img - frame.shape[1]/2.0)**2)
+        noise_annulus = np.where((r_img > 9) & (r_img <= 16))
+        psf_mask = np.where(r_img < 4.0)
+        
+        background_sum = np.nansum(frame[noise_annulus])
+        n_ann = frame[noise_annulus].shape[0]
+        n_psf = frame[psf_mask].shape[0]
+        
+        background_std = np.std(frame[noise_annulus])
+        std.append(np.sum(frame[psf])/np.sqrt((background_sum* n_psf/n_ann) + np.sum(frame[psf])) )
+        flux.append(np.sum(frame[psf])) 
+    std = np.array(std)
+    flux = np.array(flux)
+    return std/flux
+
+def normalize_contrasts(fluxes):
+    if "gpi" in instrument.lower():
+        output = fluxes
 if __name__ == '__main__':
     main(sys.argv[1:])
