@@ -48,6 +48,8 @@ data_dir = "/u/nnas/data/"
 instrument = "GPI"
 planet_name = "HR8799"
 pxscale = 0.01422
+DIT_SCIENCE = 64.0 # Set with argparse
+DIT_FLUX = 4.0 # Set with argparse
 
 def main(args):
     """
@@ -68,6 +70,10 @@ def main(args):
     parser.add_argument("instrument", type=str, default= "GPI")
     parser.add_argument("name", type=str, default= "HR8799")   
     parser.add_argument("posn", type=float, nargs = "+") # rough guess at sep [mas] and PA [deg]
+    # OBJECT/SCIENCE and OBJECT/FLUX integration times for normalisation
+    parser.add_argument("-ds","--ditscience", type=float, required=False)
+    parser.add_argument("-df","--ditflux", type=float, required=False)
+
     args = parser.parse_args(args)
 
     # Setup constants
@@ -76,7 +82,10 @@ def main(args):
     planet_name = args.name
     guesssep, guesspa = args.posn
     guessflux = 5e-5
-
+    if args.ditscience is not None:
+        DIT_SCIENCE = args.ditscience
+    if args.ditflux is not None:
+        DIT_FLUX = args.ditflux
     # Setup directories
     if not data_dir.endswith("/"):
         data_dir += "/"
@@ -106,6 +115,7 @@ def main(args):
     exspect, fm_matrix = KLIP_Extraction(dataset, PSF_cube, posn, numthreads)
     contrasts,flux = get_spectrum(dataset, exspect,spot_to_star_ratio, stellar_model)
     KLIP_fulframe(dataset, PSF_cube, posn, numthreads)
+    combine_residuals()
     return exspect, fm_matrix, contrasts, flux
 
 def init_sphere():
@@ -137,16 +147,19 @@ def init_gpi():
     return dataset
 
 def init_psfs(dataset):
-    # The units of your model PSF are important, the return spectrum will be
-    # relative to the input PSF model, see next example
-    # generate_psf_cube has better background subtraction than generate_psfs
-    dataset.generate_psf_cube(21)
 
     # useful constants
     N_frames = len(dataset.input)
     N_cubes = np.size(np.unique(dataset.filenums))
     nl = N_frames // N_cubes
 
+    # The units of your model PSF are important, the return spectrum will be
+    # relative to the input PSF model, see next example
+    # generate_psf_cube has better background subtraction than generate_psfs
+    if "sphere" in instrument.lower():
+        return dataset.psfs,dataset.psfs,DIT_SCIENCE/DIT_FLUX
+    
+    dataset.generate_psf_cube(21)
     # NOTE: not using pretty much all of the example calibration
     PSF_cube = dataset.psfs
     model_psf_sum = np.nansum(PSF_cube, axis=(1,2))
@@ -304,6 +317,21 @@ def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
                     outputdir=data_dir + "pyklip/",
                     mute_progression=True)
     return 
+
+def combine_residuals():
+    files = sorted(glob.glob(data_dir + "pyklip/*fullframe*"))
+    residuals = []
+    for f in files:
+        hdul = fits.open(f)
+        residuals.append(hdul[0].data)
+        hdul.close()
+    hdr_hdul = fits.open(files[0])
+    hdu = fits.PrimaryHDU(np.array(residuals))
+    hdu.header = hdr_hdul[0].header
+    hdu.header = {**hdu.header, **hdr_hdul[1].header}
+    hdul = fits.HDUList([hdu])
+    hdul.writeto(data_dir+"pyklip/" + instrument+ "_"+ planet_name + '_residuals.fits',overwrite = True)
+
 
 
 #################

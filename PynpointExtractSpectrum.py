@@ -375,7 +375,7 @@ def save_flux(contrasts):
     for i in range(len(pcas)):
         fluxes.append(stellar_model[1]*10**((contrasts[i])/-2.5)* NORMFACTOR)
     fluxes = np.array(fluxes)
-    np.save(data_dir + "pynpoint/" + instrument + "_" + planet_name + "_flux",fluxes) # Saved in W/m2/micron at 10pc
+    np.save(data_dir + "pynpoint/" + instrument + "_" + planet_name + "_flux_10pc_7200K",fluxes) # Saved in W/m2/micron at 10pc
 
 # Reshape science and PSF files for PCA, 
 def preproc_files():
