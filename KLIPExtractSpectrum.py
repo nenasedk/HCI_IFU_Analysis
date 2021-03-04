@@ -119,16 +119,43 @@ def main(args):
     return exspect, fm_matrix, contrasts, flux
 
 def init_sphere():
-    datacube = data_dir + "science_pyklip.fits"
-    psfcube = data_dir + "psf_pyklip.fits"
+    datacube = data_dir + "frames_removed.fits"
+    if os.path.isfile(data_dir + "psf_satellites_calibrated.fits"):
+        psfcube = data_dir + "psf_satellites_calibrated.fits"
+    else:
+        psfcube = data_dir + "psf_cube.fits"
+
+    # Sanity check on data shape
+    # not a fan of hard coded number of channels
+   """ hdul = fits.open(datacube)
+    # Sphere has 39 wavelength bins for both YJH and YJ
+    if hdul[0].shape[0] == 39:
+        new_data = np.swapaxes(hdul[0].data,0,1)
+        hdu = fits.PrimaryHDU(new_data)
+        hdu.header = hdul[0].header
+        hdu.header['NAXIS3'] = new_data.shape[1]
+        hdu.header['NAXIS4'] = new_data.shape[0]
+        hdul_new = fits.HDUList([hdu])
+        datacube = data_dir + "pyklip_frames_removed.fits"
+        hdul_new.writeto(datacube,overwrite=True)"""
+
     fitsinfo = data_dir + "parang_removed.fits"
     wvinfo = data_dir + "wavelength.fits"
+    hdul_w = fits.open(data_dir + wvinfo)
+    # Sanity check on wlen units
+    if np.mean(hdul_w[0].data)>100.:
+        hdu_wlen = fits.PrimaryHDU([hdul_w[0].data/1000])
+        hdu_wlen.header = hdul_w[0].header
+        hdu_wlen.header["UNITS"] = "micron"
+        hdul_wlen = fits.HDUList([hdu_wlen])
+        hdul_wlen.writeto(data_dir + "wavelength.fits",overwrite=True)
+
     dataset = SPHERE.Ifs(datacube, 
                          psfcube,
                          fitsinfo,
                          wvinfo, 
                          nan_mask_boxsize=9,
-                         psf_cube_size = 11 )
+                         psf_cube_size = 13)
     print("read in data")
     return dataset
 
@@ -247,6 +274,7 @@ def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
     nl = N_frames // N_cubes
     wlen = dataset.wvs[:nl]
 
+    print("Saving contrasts and flux calibrated spectrum for " + planet_name)
     # Contrast figures
     fig,ax = plt.subplots(figsize = (16,10))
     ax.set_xlabel("Wavelength [micron]")
@@ -319,6 +347,7 @@ def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
     return 
 
 def combine_residuals():
+    print("Combining residuals into fits file.")
     files = sorted(glob.glob(data_dir + "pyklip/*fullframe*"))
     residuals = []
     for f in files:

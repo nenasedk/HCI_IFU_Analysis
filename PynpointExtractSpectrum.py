@@ -87,6 +87,7 @@ def main(args):
     # OBJECT/SCIENCE and OBJECT/FLUX integration times for normalisation
     parser.add_argument("-ds","--ditscience", type=float, required=False)
     parser.add_argument("-df","--ditflux", type=float, required=False)
+    parser.add_argument("-c","--cont", action='store_true',required=False)
     args = parser.parse_args(args)
 
     # Set up from args
@@ -100,7 +101,9 @@ def main(args):
         DIT_SCIENCE = args.ditscience
     if args.ditflux is not None:
         DIT_FLUX = args.ditflux
-
+    cont = False
+    if args.cont is not None:
+        cont = True
     # Setup directories
     if not data_dir.endswith("/"):
         data_dir += "/"
@@ -137,12 +140,12 @@ def main(args):
 
     # Sanity chec the posn
     print(posn_pyn)
-
-    # Run ADI for each channel individually
-    run_all_channels(nChannels,
-                 base_name,
-                 instrument + "_" + planet_name,
-                 posn_pyn)
+    if not cont:
+        # Run ADI for each channel individually
+        run_all_channels(nChannels,
+                        base_name,
+                        instrument + "_" + planet_name,
+                        posn_pyn)
 
     # Save outputs to numpy arrays
     contrasts = save_contrasts(nChannels,
@@ -295,10 +298,10 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
 def run_all_channels(nchannels, base_name, output_name, posn):
     if "sphere" in instrument.lower():
         # use 'frames removed' files
-        test_analysis("*_removed.fits","*_PSF.fits",output_name,posn,data_dir)
+        test_analysis("frames_removed.fits","*_PSF.fits",output_name,posn,data_dir)
     elif "gpi" in instrument.lower():
         # reshape data into a single file to read in for correct shape
-        test_analysis("*science_full.fits","*_PSF.fits",output_name,posn,data_dir)
+        test_analysis("*pyklip_frames_removed.fits","*_PSF.fits",output_name,posn,data_dir)
 
     # Loop over all channels
     for channel in range(nchannels):
@@ -329,6 +332,7 @@ def run_all_channels(nchannels, base_name, output_name, posn):
     # Save residuals to a more manageable file
     residuals = [] #pynpoint mag units
     contrasts = [] #in actual contrast units, only needs stellar spectrum normalization
+    print("Saving residual outputs")
     for pca in pcas:
         rpcas = []
         contrast = []
@@ -357,6 +361,7 @@ def run_all_channels(nchannels, base_name, output_name, posn):
 
 # Save contrasts to a useable array
 def save_contrasts(nchannels,base_name,output_place,output_name):
+    print("Saving contrast spectrum for " + planet_name)
     contrasts = [] # the contrast of the planet itself
     for pca in pcas:
         contrast = []
@@ -365,12 +370,13 @@ def save_contrasts(nchannels,base_name,output_place,output_name):
             contrast.append(samples[-1][4])
         contrasts.append(contrast)
     cont = np.array(contrasts)
-    np.save(output_place + output_name +  "contrasts",cont) # saved in magnitude units
+    np.save(output_place + output_name +  "_contrasts",cont) # saved in magnitude units
     return cont
 
 # Normalize with stellar flux
 def save_flux(contrasts):
-    stellar_model = np.genfromtxt("/Users/nasedkin/data/HR8799/stellar_model/hr8799_star_spec_"+ instrument.upper() +"_fullfit_10pc.dat").T
+    print("Saving flux calibrated spectrum for " + planet_name)
+    stellar_model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_"+ instrument.upper() +"_fullfit_10pc.dat").T
     fluxes = []
     for i in range(len(pcas)):
         fluxes.append(stellar_model[1]*10**((contrasts[i])/-2.5)* NORMFACTOR)
@@ -389,12 +395,27 @@ def preproc_files():
     data_shape = None
     if "sphere" in instrument.lower():
         science_name = "frames_removed.fits"
-        psf_name = "psf_satellites_calibrated.fits"
+        if os.path.isfile(data_dir + "psf_satellites_calibrated.fits"):
+            psf_name= "psf_satellites_calibrated.fits"
+        else:
+            psf_name = "psf_cube.fits"
+        
+        # sanity check on wlen units
+        hdul_w = fits.open(data_dir + "wavelength.fits")
+        if np.mean(hdul_w[0].data)>100.:
+            hdu_wlen = fits.PrimaryHDU([hdul_w[0].data/1000])
+            hdul_wlen = fits.HDUList([hdu_wlen])
+            hdul_wlen.writeto(data_dir + "wavelength.fits",overwrite=True)
+        
+        
+        # sanity check on wlen units
+        if os.path.isfile(data_dir + "parang_removed.fits"):
+            shutil.copy(data_dir + "parang_removed.fits",data_dir + "parangs.fits")
 
         hdul = fits.open(data_dir + science_name)
         cube = hdul[0].data
         NORMFACTOR = DIT_SCIENCE/DIT_FLUX
-
+        
         # Data shape is used to calculate image center, so it's returned
         if data_shape is None:
             data_shape = cube.shape
@@ -476,7 +497,7 @@ def preproc_files():
         hdu.header['ESO ADA POSANG'] = (dataset.PAs.reshape(len(filelist),37)[:,0][0]+ 180.0)
         hdu.header['ESO ADA POSANG END'] = (dataset.PAs.reshape(len(filelist),37)[:,0][-1]+ 180.0 )
         hdul_new = fits.HDUList([hdu])
-        hdul_new.writeto(data_dir + "HR8799_"+instrument + '_science_full.fits', overwrite = True)
+        hdul_new.writeto(data_dir + "HR8799_"+instrument + 'pyklip_frames_removed.fits', overwrite = True)
         header_hdul.close()
 
         # Repeat the exercise for the PSFs

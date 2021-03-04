@@ -1,10 +1,18 @@
 import sys,os
 import argparse
+import glob
 os.environ["OMP_NUM_THREADS"] = "1"
 
 import numpy as np
 from astropy.io import fits
 from photutils import CircularAperture, CircularAnnulus, aperture_photometry
+
+# My own files
+from Astrometry import get_astrometry, read_astrometry, init_sphere, init_gpi, set_psfs
+
+# Exoplanet stuff
+import pyklip.instruments.GPI as GPI
+
 data_dir = "/u/nnas/data/HR8799/HR8799_AG_reduced/GPIK2/" #SPHERE-0101C0315A-20/channels/
 distance = 41.2925 #pc
 instrument = "GPI"
@@ -19,9 +27,9 @@ def main(args):
     global planet_name
     global pxscale
     parser = argparse.ArgumentParser()
-    parser.add_argument("path", type=str, default= "/u/nnas/data/", required=True)
-    parser.add_argument("instrument", type=str, default= "GPI", required=True)
-    parser.add_argument("name", type=str, default= "HR8799", required=True)   
+    parser.add_argument("path", type=str, default= "/u/nnas/data/")
+    parser.add_argument("instrument", type=str, default= "GPI")
+    parser.add_argument("name", type=str, default= "HR8799")   
     args = parser.parse_args(args)
 
     if "gpi" in instrument.lower():
@@ -32,24 +40,20 @@ def main(args):
     data_dir = args.path
     instrument = args.instrument
     planet_name = args.name
-    posn_dict = read_astrometry(data_dir,planet_name)
+    posn_dict = read_astrometry(data_dir+"../",planet_name)
 
     # Spectrum - the flux calibrated spectrum
     spectrum = np.load(data_dir + instrument + "_" + planet_name + "_flux_10pc_7200K.npy")
 
     # Contrast unit spectrum.
-    contrasts = np.load(data_dir + instrument + "_" + planet_name + "_contrasts.npy")
-    
+    contrasts = np.load(data_dir + instrument + "_" + planet_name + "contrasts.npy")
     # Residuals - the full frame residuals from processing, in contrast units
     # Might need to be careful about naming here.
+    print("Loading Data")
     if os.path.exists(data_dir + instrument + "_" + planet_name + "_residuals.npy"):
         residuals = np.load(data_dir + instrument + "_" + planet_name + "_residuals.npy")
     elif os.path.exists(data_dir + instrument + "_" + planet_name + "_residuals.fits"):
-        hdul = fits.load(data_dir + instrument + "_" + planet_name + "_residuals.fits")
-        residuals = hdul[0].data
-        hdul.close()
-    elif os.path.exists(data_dir + instrument + "_" + planet_name + "_residuals.fits"):
-        hdul = fits.load(data_dir + instrument + "_" + planet_name + "_residuals.fits")
+        hdul = fits.open(data_dir + instrument + "_" + planet_name + "_residuals.fits")
         residuals = hdul[0].data
         hdul.close()
     else:
@@ -74,14 +78,17 @@ def main(args):
     # First we need to get the uncorrelated error
     # This is a comnbination of residual error far from the star, and photometric error on the stellar psf
     # Both real units and fractional error are returned
-    total_err,frac_err_,_ = uncorrelated_error(residuals,spectrum,nl,npca,flux_cal=True)
-    cont_err,frac_cont_err_,_ = uncorrelated_error(residuals,contrasts,nl,npca)
+    print("Calculating Uncorrelated Errors...")
+    total_err,frac_err,_,_ = uncorrelated_error(residuals,spectrum,nl,npca,flux_cal=True)
+    cont_err,frac_cont_err,_,_ = uncorrelated_error(residuals,contrasts,nl,npca)
 
     # Now we can compute the correlation and covariance matrices
     # The covariance matrix is normalised so that sqrt(diag(cov)) = uncorrelated error
+    print("Computing Covariance...")
     cor,cov = get_covariance(residuals,total_err,posn_dict,nl,npca)
     cor_cont,cov_cont = get_covariance(residuals,cont_err,posn_dict,nl,npca)
 
+    print("Done!")
     # All of the outputs get combined and saved to a fits file
     fits_output(spectrum,cov,cor, pcas=pcas, contrast = contrasts, cont_cov = cov_cont)
     return
@@ -101,8 +108,8 @@ def create_circular_mask(h, w, center=None, radius=None):
 
 # So much repeated code to clean up....
 # Apologies to future me.
-def get_covariance(contrast,total_err,posn_dict,nl,npca=None):
-    center = (contrasts.shape[-2]/2,contrasts.shape[-1]/2.0)
+def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
+    center = (residuals.shape[-2]/2,residuals.shape[-1]/2.0)
     width = 7
     r_in = posn_dict['Separation [mas]'][0]/1000/pxscale - width
     r_out = posn_dict['Separation [mas]'][0]/1000/pxscale + width
@@ -114,14 +121,14 @@ def get_covariance(contrast,total_err,posn_dict,nl,npca=None):
             fluxes = []
             for i in range(nl):
                 # Stack and median subtract
-                med = contrast[j,i]
+                med = residuals[j,i]
                 # Mask out planet (not sure if correct location)
-                mask = create_circular_mask(contrast.shape[2],contrast.shape[3],
-                                            center = (posn_dict["Px RA offset [px]"], posn_dict["Px DEC offset [px]"]),
-                                            radius = posn_dict["Separation [mas]"]/1000*pxscale)
+                mask = create_circular_mask(residuals.shape[-2],residuals.shape[-1],
+                                            center = (posn_dict["Px RA offset [px]"][0], posn_dict["Px Dec offset [px]"][0]),
+                                            radius = posn_dict["Separation [mas]"][0]/1000/pxscale)
                 
                 # Get fluxes of all pixels within annulus
-                annulus = annulus_c.to_mask(method='center')[0]
+                annulus = annulus_c.to_mask(method='center')
                 flux = annulus.multiply(mask*med)[annulus.data>0]
                 fluxes.append(fluxes)
             fluxes = np.array(fluxes)
@@ -150,14 +157,14 @@ def get_covariance(contrast,total_err,posn_dict,nl,npca=None):
         fluxes = []
         for i in range(nl):
             # Stack and median subtract
-            med = contrast[i]
+            med = residuals[i]
             # Mask out planet (not sure if correct location)
-            mask = create_circular_mask(contrast.shape[1],contrast.shape[2],
+            mask = create_circular_mask(residuals.shape[-2],residuals.shape[-1],
                                         center = (posn_dict["Px RA offset [px]"], posn_dict["Px DEC offset [px]"]),
                                         radius = posn_dict["Separation [mas]"]/1000*pxscale)
             
             # Get fluxes of all pixels within annulus
-            annulus = annulus_c.to_mask(method='center')[0]
+            annulus = annulus_c.to_mask(method='center')
             flux = annulus.multiply(mask*med)[annulus.data>0]
             fluxes.append(fluxes)
         fluxes = np.array(fluxes)
@@ -198,7 +205,7 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
     annulus_c = CircularAnnulus(center,r_in = r_in, r_out = r_out)
     model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_" + instrument.upper() + "_fullfit_10pc.dat").T
 
-    if flux_cal
+    if flux_cal:
         stellar_model = model[1]
     else:
         stellar_model = np.ones_like(model[1])
@@ -210,12 +217,9 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
     elif instrument.lower() == "sphereyjh":
         psf_cube = fits.open(glob.glob(data_dir + psf_name)[0])
     elif "gpi" in instrument.lower():
-        psf_name = glob.glob(data_dir + "*_PSF_cube.fits")[0]
+        psf_name = glob.glob(data_dir + "../*_PSF_cube.fits")[0]
         psf = fits.open(psf_name)[0].data
-        if not os.path.isdir(data_dir + "pyklip"):
-            os.makedirs(data_dir + "pyklip", exist_ok=True) 
-
-        filelist = sorted(glob.glob(data_dir +"*distorcorr.fits"))
+        filelist = sorted(glob.glob(data_dir +"../*distorcorr.fits"))
         dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True)
         dataset.generate_psf_cube(41)
         psf_cube = dataset.psfs
@@ -236,22 +240,22 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
                 med = residuals[j,i]
                 # Mask out planet (not sure if correct location)
                 # Get fluxes of all pixels within annulus
-                annulus = annulus_c.to_mask(method='center')[0]
+                annulus = annulus_c.to_mask(method='center')
 
                 # Assuming contrast units for residuals
                 flux = annulus.multiply(med)[annulus.data>0]*stellar_model[i]
                 frac_err = 1/np.sqrt(np.var(flux) + spectrum[j,i])
-
-                flux_l.append(fluxes)
+                flux_l.append(flux)
                 uc_l.append(frac_err)
-                tot_l.append(np.sqrt(frac_err**2 + phot_err**2))
+                tot_l.append(np.sqrt(frac_err**2 + phot_err[i]**2))
             flux_l = np.array(flux_l)
             uc_l = np.array(uc_l)
             tot_l = np.array(tot_l)
+
             fluxes.append(flux_l)
             uncor_err.append(uc_l)
             total_err.append(tot_l)
-            real_err.append(tot_l*spectrum)
+            real_err.append(tot_l*spectrum[j])
 
         fluxes = np.array(fluxes)
         uncor_err = np.array(uncor_err)
@@ -263,15 +267,15 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
             med = residuals[i]
             # Mask out planet (not sure if correct location)
             # Get fluxes of all pixels within annulus
-            annulus = annulus_c.to_mask(method='center')[0]
+            annulus = annulus_c.to_mask(method='center')
 
             # Assuming contrast units for residuals
             flux = annulus.multiply(med)[annulus.data>0]*stellar_model[i]
             frac_err = 1/np.sqrt(np.var(flux) + spectrum[i])
 
-            fluxes.append(fluxes)
+            fluxes.append(flux)
             uncor_err.append(frac_err)
-            total_err.append(np.sqrt(frac_err**2 + phot_err**2))
+            total_err.append(np.sqrt(frac_err**2 + phot_err[i]**2))
         fluxes = np.array(fluxes)
         uncor_err = np.array(uncor_err)
         total_err = np.array(total_err)
@@ -297,8 +301,8 @@ def photometric_error(psf_cube):
         n_psf = frame[psf_mask].shape[0]
         
         background_std = np.std(frame[noise_annulus])
-        std.append(np.sum(frame[psf])/np.sqrt((background_sum* n_psf/n_ann) + np.sum(frame[psf])) )
-        flux.append(np.sum(frame[psf])) 
+        std.append(np.sum(frame[psf_mask])/np.sqrt((background_sum* n_psf/n_ann) + np.sum(frame[psf_mask])) )
+        flux.append(np.sum(frame[psf_mask])) 
     std = np.array(std)
     flux = np.array(flux)
     return std/flux
@@ -330,14 +334,14 @@ def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,con
     if pca is not None:
         pcastr = "_"+str(pca).zfill(2)
         outstring += pcastr
-    outstring += ".fits"
+    outstring += "_spectrum.fits"
     hdul.writeto(outstring)
     return
 
 def fits_output(spectrum,covariance,correlation,pcas=None,contrast = None,cont_cov = None):
     if pcas is not None:
-        for pca in pcas:
-            fits_one_output(spectrum,covariance,correlation,pca,contrast,cont_cov)
+        for i,pca in enumerate(pcas):
+            fits_one_output(spectrum[i],covariance[i],correlation[i],pca,contrast[i],cont_cov[i])
     else:
         fits_one_output(spectrum,covariance,correlation,None,contrast,cont_cov)
     return

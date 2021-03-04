@@ -81,9 +81,19 @@ def init():
     global pixscale
     if "sphere" in instrument.lower():
         science_name = "frames_removed.fits"
+        if os.path.isfile(data_dir + "psf_satellites_calibrated.fits"):
+            psf_name= "psf_satellites_calibrated.fits"
+        else:
+            psf_name = "psf_cube.fits"        
+        # sanity check on wlen units
+        hdul_w = fits.open(data_dir + "wavelength.fits")
+        if np.mean(hdul_w[0].data)>100.:
+            hdu_wlen = fits.PrimaryHDU([hdul_w[0].data/1000])
+            hdul_wlen = fits.HDUList([hdu_wlen])
+            hdul_wlen.writeto(data_dir + "wavelength.fits",overwrite=True)        
         parang_name = "parang_removed.fits"
-        psf_name = "psf_satellites_calibrated.fits"
-        wlen_name = "wvs_micron.fits"
+        wlen_name = "wavelength.fits"
+
         pixscale = 0.00746
         # Science Data
         hdul = fits.open(data_dir + science_name)
@@ -101,23 +111,68 @@ def init():
         psf_hdul = fits.open(data_dir + psf_name)
         psfs = psf_hdul[0].data
         psf_hdul.close()
+
     elif "gpi" in instrument.lower():
         pixscale = 0.0162
         science_name = "*distorcorr.fits"
         psf_name = glob.glob(data_dir + "*-original_PSF_cube.fits")[0]
-        psfs = fits.open(psf_name)[0].data
+        psf_hdul = fits.open(psf_name)
+        psfs = psf_hdul[0].data
 
-        filelist = glob.glob(data_dir +science_name)
-        dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf)
+        # Filelist MUST be sorted for PAs and frames to be in correct order for pynpoint
+        # Assuming standard GPI naming scheme
+        filelist = sorted(glob.glob(data_dir +science_name))
+        dataset = GPI.GPIData(filelist, highpass=True, PSF_cube = psfs,recalc_centers=True)
+        dataset.generate_psf_cube(41)
 
-        ###### Useful values based on dataset ######
-        N_frames = len(dataset.input)
-        N_cubes = np.size(np.unique(dataset.filenums))
-        nl = N_frames // N_cubes
+        band = dataset.prihdrs[0]['APODIZER'].split('_')[1]
+        spot_to_star_ratio = dataset.spot_ratio[band]
+        NORMFACTOR = spot_to_star_ratio
 
-        wlen = dataset.wvs[:nl]
-        science = dataset.input
-        angles = dataset.PAs
+        # Need to order the GPI data for pynpoint
+        shape = dataset.input.shape
+        science = dataset.input.reshape(len(filelist),37,shape[-2],shape[-1])
+        science = np.swapaxes(science,0,1)
+        science_pyn = []
+        if data_shape is None:
+                data_shape = science.shape
+        for channel,frame in enumerate(science[:]):
+            # The PSF center isn't aligned with the image center, so let's fix that
+            centx = dataset.centers.reshape(len(filelist),37,2)[:,channel,0]
+            centy = dataset.centers.reshape(len(filelist),37,2)[:,channel,1]
+            shiftx,shifty = (int((frame.shape[-2]/2))*np.ones_like(centx) - centx,
+                             (int(frame.shape[-1]/2))*np.ones_like(centy) - centy)
+            shifted = vip.preproc.recentering.cube_shift(frame,shiftx,shifty)
+            # Save for a full file, not channel by channel
+            science_pyn.append(shifted)
+        # Save the full file (wlens,nframes,x,y)
+        hdu = fits.PrimaryHDU(np.array(science_pyn))
+        header_hdul = fits.open(filelist[0])
+        hdu.header = header_hdul[0].header
+        hdu.header.update(header_hdul[1].header)
+        hdu.header['NDIT'] = science.shape[1]
+        hdu.header['NAXIS3'] = science.shape[1] # Time/PA
+        hdu.header['NAXIS4'] = science.shape[0] # WLEN
+        hdu.header['CDELT3'] = np.mean(np.diff(dataset.PAs.reshape(len(filelist),37)[:,0]))
+        hdu.header['CDELT4'] = np.mean(np.diff(dataset.wvs[:37]))
+        hdu.header['ESO ADA POSANG'] = (dataset.PAs.reshape(len(filelist),37)[:,0][0]+ 180.0)
+        hdu.header['ESO ADA POSANG END'] = (dataset.PAs.reshape(len(filelist),37)[:,0][-1]+ 180.0 )
+        hdul_new = fits.HDUList([hdu])
+        hdul_new.writeto(data_dir + "HR8799_"+instrument + 'pyklip_frames_removed.fits', overwrite = True)
+        header_hdul.close()
+        
+        # Save wavelengths
+        hdu = fits.PrimaryHDU(dataset.wvs[:37])
+        hdul_new = fits.HDUList([hdu])
+        hdul_new.writeto(data_dir + "wavelength.fits",overwrite = True)
+
+        # pyklip does weird things with the PAs, so let's fix that.
+        # Keep or remove dataset.ifs_rotation? GPI IFS is rotated 23.5 deg, 
+        pas = (dataset.PAs.reshape(len(filelist),37)[:,0] + 180.0)
+        hdu = fits.PrimaryHDU(pas)
+        hdul_new = fits.HDUList([hdu])
+        hdul_new.writeto(data_dir + "parangs.fits",overwrite = True)
+        del dataset
 
 
     global fwhm
