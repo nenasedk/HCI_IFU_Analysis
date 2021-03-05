@@ -6,6 +6,13 @@ os.environ["OMP_NUM_THREADS"] = "1"
 import numpy as np
 from astropy.io import fits
 from photutils import CircularAperture, CircularAnnulus, aperture_photometry
+# Weird matplotlib imports for cluster use
+import matplotlib
+matplotlib.use('Agg') # set the backend before importing pyplot
+import matplotlib.pyplot as plt
+from matplotlib.ticker import StrMethodFormatter
+from matplotlib import rcParams
+from matplotlib import rc
 
 # My own files
 from Astrometry import get_astrometry, read_astrometry, init_sphere, init_gpi, set_psfs
@@ -18,7 +25,7 @@ distance = 41.2925 #pc
 instrument = "GPI"
 planet_name = "HR8799e"
 pxscale = 0.00746
-
+CENTER = (0.,0.)
 def main(args):
     sys.path.append(os.getcwd())
 
@@ -26,6 +33,7 @@ def main(args):
     global instrument
     global planet_name
     global pxscale
+    global CENTER
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=str, default= "/u/nnas/data/")
     parser.add_argument("instrument", type=str, default= "GPI")
@@ -57,11 +65,17 @@ def main(args):
         residuals = np.load(data_dir + instrument + "_" + planet_name + "_residuals.npy")
     elif os.path.exists(data_dir + instrument + "_" + planet_name + "_residuals.fits"):
         hdul = fits.open(data_dir + instrument + "_" + planet_name + "_residuals.fits")
-        residuals = hdul[0].data
+        residuals = [hdu.data for hdu in hduls]
+        if "gpi" in instrument.lower():
+            CENTER = (hdul[0].header['PSFCENTX'],hdul[0].header['PSFCENTX'])
+        else:
+            CENTER = (residual.shape[-2]/2.0,residual.shape[-1]/2.0)
         hdul.close()
     else:
         print("No residual file found!")
         return
+    residuals = np.array(residuals)
+    print(spectrum.shape,residuals.shape)
 
     # Checks to see if our residuals are for a full set of PCA components
     # Spectrum must have each PCA if residuals do.
@@ -113,10 +127,10 @@ def create_circular_mask(h, w, center=None, radius=None):
 def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
     print("Computing Covariance...")
 
-    center = (residuals.shape[-2]/2,residuals.shape[-1]/2.0)
+    center = CENTER
     width = 7
-    r_in = posn_dict['Separation [mas]'][0]/1000/pxscale - width
-    r_out = posn_dict['Separation [mas]'][0]/1000/pxscale + width
+    r_in = posn_dict['Separation [mas]'][0]/1000/pxscale - 3
+    r_out = posn_dict['Separation [mas]'][0]/1000/pxscale + 3
     annulus_c = CircularAnnulus(center,r_in = r_in, r_out = r_out)
     if npca is not None:
         cors = []
@@ -129,13 +143,27 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
                 med = residuals[j,i]
                 # Mask out planet (not sure if correct location)
                 mask = create_circular_mask(residuals.shape[-2],residuals.shape[-1],
-                                            center = (posn_dict["Px RA offset [px]"][0], posn_dict["Px Dec offset [px]"][0]),
-                                            radius = posn_dict["Separation [mas]"][0]/1000/pxscale)
+                                            center = (-1*posn_dict["Px RA offset [px]"][0] + CENTER[0],
+                                            posn_dict["Px Dec offset [px]"][0] + CENTER[1]),
+                                            radius = 6.0)
                 
                 # Get fluxes of all pixels within annulus
                 annulus = annulus_c.to_mask(method='center')
                 flux = annulus.multiply(mask*med)[annulus.data>0]
-                fluxes.append(fluxes)
+                fluxes.append(flux)
+                if i==25 and j==4:
+                    fig,ax = plt.subplots(ncols = 2, figsize=(16,8))
+                    ax = ax.flatten()
+                    ax[0].imshow(med)
+                    ax[1].imshow(med*mask)
+                    theta = np.linspace(0, 2*np.pi, 100) 
+                    a = r_out*np.cos(theta)+ CENTER[0]
+                    b = r_out*np.sin(theta)+ CENTER[1]
+                    c = r_in*np.cos(theta)+ CENTER[0]
+                    d = r_in*np.sin(theta)+ CENTER[1]
+                    ax[1].plot(a,b,c='r')
+                    ax[1].plot(c,d,c='r')
+                    plt.savefig(data_dir + "annulus_check.pdf")
             fluxes = np.array(fluxes)
             # Compute correlation, Eqn 1 Samland et al 2017, https://arxiv.org/pdf/1704.02987.pdf
             cor = np.zeros((fluxes.shape[0],fluxes.shape[0]))
@@ -147,7 +175,7 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
                     bottom = np.sqrt(np.mean(np.dot(fluxes[m],fluxes[m]))*np.mean(np.dot(fluxes[n],fluxes[n])))
                     #print(top,bottom)
                     cor[m,n] = top/bottom 
-                    cov[m,n] = top/bottom * total_err[m]*total_err[n]
+                    cov[m,n] = top/bottom * (total_err[j,m]*total_err[j,n])
 
             cors.append(cor)
             covs.append(cov)
@@ -165,13 +193,13 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
             med = residuals[i]
             # Mask out planet (not sure if correct location)
             mask = create_circular_mask(residuals.shape[-2],residuals.shape[-1],
-                                        center = (posn_dict["Px RA offset [px]"], posn_dict["Px DEC offset [px]"]),
-                                        radius = posn_dict["Separation [mas]"]/1000*pxscale)
-            
+                                        center = (-1*posn_dict["Px RA offset [px]"][0] + CENTER[0],
+                                        posn_dict["Px Dec offset [px]"][0] + CENTER[1]),
+                                        radius = 6.0)
             # Get fluxes of all pixels within annulus
             annulus = annulus_c.to_mask(method='center')
             flux = annulus.multiply(mask*med)[annulus.data>0]
-            fluxes.append(fluxes)
+            fluxes.append(flux)
         fluxes = np.array(fluxes)
         cor = np.zeros((fluxes.shape[0],fluxes.shape[0]))
         cov = np.zeros((fluxes.shape[0],fluxes.shape[0]))
@@ -182,7 +210,7 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
                 bottom = np.sqrt(np.mean(np.dot(fluxes[m],fluxes[m]))*np.mean(np.dot(fluxes[n],fluxes[n])))
                 #print(top,bottom)
                 cor[m,n] = top/bottom
-                cov[m,n] = top/bottom * total_err[m]*total_err[n]
+                cov[m,n] = top/bottom * (total_err[m]*total_err[n])**2
 
         np.save(data_dir + instrument + "_" + planet_name + "_correlation",cor)
         np.save(data_dir + instrument + "_" + planet_name + "_covariance",cov)
@@ -205,7 +233,7 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
         loc = 1200.
     elif "sphere" in instrument.lower():
         loc = 750.
-    center = (residuals.shape[-2]/2,residuals.shape[-1]/2.0)
+    center = CENTER
     width = 7
     r_in = loc/1000/pxscale - width
     r_out = loc/1000/pxscale + width
@@ -227,15 +255,17 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
         psf_name = glob.glob(data_dir + "../*_PSF_cube.fits")[0]
         psf_hdul = fits.open(psf_name)
         psf = psf_hdul[0].data        
-        psf_hdul.close()
-
+        print(psf.shape)
         filelist = sorted(glob.glob(data_dir +"../*distorcorr.fits"))
         dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True)
         dataset.generate_psf_cube(41)
+
         psf_cube = dataset.psfs
-    
+        psf_hdul.close()
+
     # Fractional error on stellar psf
     phot_err = photometric_error(psf_cube)
+    print(phot_err)
     fluxes = []
     uncor_err = []
     total_err = []
@@ -255,7 +285,8 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
 
                 # Assuming contrast units for residuals
                 flux = annulus.multiply(med)[annulus.data>0]*stellar_model[i]
-                frac_err = 1/np.sqrt(np.var(flux) + spectrum[j,i])
+                #frac_err = spectrum[j,i]/np.sqrt(np.sum(flux)*flux.shape[0]/16.0 + spectrum[j,i])
+                frac_err= np.std(flux)/spectrum[j,i] 
                 flux_l.append(flux)
                 uc_l.append(frac_err)
                 tot_l.append(np.sqrt(frac_err**2 + phot_err[i]**2))
@@ -320,24 +351,29 @@ def photometric_error(psf_cube):
     return std/flux
 
 def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,cont_cov = None):
-    wavelength = get_wlen()
-
+    wavelength = fits.open(data_dir + "../wavelength.fits")[0].data
     if "gpi" in instrument.lower():
         instrum = "GPI"
+
     elif "sphere" in instrument.lower():
         instrum = "SPHERE"
-    primary_hdu = fits.PrimaryHDU(name = 'PRIMARY')
-    primary_hdu.header['INSTRUME'] = instrum
+
+    filelist = glob.glob(data_dir + instrument + "_" + planet_name + "_residuals.fits")
+    hdr_hdul = fits.open(filelist[0])
+    hdr = hdr_hdul[0].header
+
+    primary_hdu = fits.PrimaryHDU([])
+    primary_hdu.header = hdr
     primary_hdu.header['OBJECT'] = planet_name
 
     c1 = fits.Column(name = "WAVELENGTH", array = wavelength, format = 'D',unit = "micron")
     c2 = fits.Column(name = "FLUX", array = spectrum, format = 'D',unit = "W/m2/micron")
-    c3 = fits.Column(name = "COVARIANCE", array = covariance, format = 'D',unit = "[W/m2/micron]^2")
-    c4 = fits.Column(name = "CORRELATION", array = correlation, format = 'D',unit = " - ")
+    c3 = fits.Column(name = "COVARIANCE", array = covariance, format = str(covariance.shape[0])+'D',unit = "[W/m2/micron]^2")
+    c4 = fits.Column(name = "CORRELATION", array = correlation, format =  str(correlation.shape[0])+'D',unit = " - ")
     columns = [c1,c2,c3,c4]
     if contrast is not None:
-        c5 = fits.Column(name = "CONTRAST", array = wavelength, format = 'D',unit = " - ")
-        c6 = fits.Column(name = "COVARIANCE_CONTRAST", array = wavelength, format = 'D',unit = " - ^2")
+        c5 = fits.Column(name = "CONTRAST", array = contrast, format = 'D',unit = " - ")
+        c6 = fits.Column(name = "COVARIANCE_CONTRAST", array = cont_cov, format = str(cont_cov.shape[0])+'D',unit = " - ^2")
         columns.extend([c5,c6])
     table_hdu = fits.BinTableHDU.from_columns(columns,name = 'SPECTRUM')
     hdul = fits.HDUList([primary_hdu,table_hdu])
@@ -347,13 +383,16 @@ def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,con
         pcastr = "_"+str(pca).zfill(2)
         outstring += pcastr
     outstring += "_spectrum.fits"
-    hdul.writeto(outstring)
+    hdul.writeto(outstring,overwrite=True,checksum=True,output_verify='exception')
     return
 
 def fits_output(spectrum,covariance,correlation,pcas=None,contrast = None,cont_cov = None):
     if pcas is not None:
         for i,pca in enumerate(pcas):
-            fits_one_output(spectrum[i],covariance[i],correlation[i],pca,contrast[i],cont_cov[i])
+            if contrast is None:
+                fits_one_output(spectrum[i],covariance[i],correlation[i],pca,None,None)
+            else:
+                fits_one_output(spectrum[i],covariance[i],correlation[i],pca,contrast[i],cont_cov[i])
     else:
         fits_one_output(spectrum,covariance,correlation,None,contrast,cont_cov)
     return

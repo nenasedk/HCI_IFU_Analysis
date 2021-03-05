@@ -118,6 +118,7 @@ def main(args):
         contrasts,flux = get_spectrum(dataset, exspect,spot_to_star_ratio, stellar_model)
         KLIP_fulframe(dataset, PSF_cube, posn, numthreads)
     combine_residuals()
+    del dataset
     return 
 
 def init_sphere():
@@ -339,17 +340,24 @@ def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
 def combine_residuals():
     print("Combining residuals into fits file.")
     files = sorted(glob.glob(data_dir + "pyklip/*fullframe*"))
-    residuals = []
-    for f in files:
+    hduls = []
+    hdu0 = fits.PrimaryHDU()
+    hdul = fits.open(files[0])
+    hd0.header = hdul[0].header
+    hdul.close()
+
+    hduls.append(hdu0)
+    for i,f in enumerate(files):
+        if "KLmodes" in f:
+            continue
         hdul = fits.open(f)
-        residuals.append(hdul[0].data)
+        data = hdul[1].data
+        hdu = fits.ImageHDU(data,name = str(numbasis[i])+"PC")
+        hdu.header = hdul[1].header
+        hduls.append(hdu)
         hdul.close()
-    hdr_hdul = fits.open(files[0])
-    hdr = hdr_hdul[0].header
-    hdr.update(hdr_hdul[1].header)
-    hdu = fits.PrimaryHDU(np.array(residuals,dtype = np.float64))
-    hdu.header = hdr
-    hdul = fits.HDUList([hdu])
+
+    hdul = fits.HDUList(hduls)
     hdul.writeto(data_dir+"pyklip/" + instrument+ "_"+ planet_name + '_residuals.fits',
                  overwrite=True, checksum=True, output_verify='fix')
 

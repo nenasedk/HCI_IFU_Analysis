@@ -333,6 +333,7 @@ def run_all_channels(nchannels, base_name, output_name, posn):
     residuals = [] #pynpoint mag units
     contrasts = [] #in actual contrast units, only needs stellar spectrum normalization
     print("Saving residual outputs")
+    combine_residuals()
     for pca in pcas:
         rpcas = []
         contrast = []
@@ -360,6 +361,45 @@ def run_all_channels(nchannels, base_name, output_name, posn):
     hdul = fits.HDUList([hdu])
     hdul.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_residuals.fits',
                  overwrite=True,checksum=True,output_verify='exception')
+
+def combine_residuals():
+    print("Combining residuals into fits file.")
+    hduls_c= []
+    hduls_m= []
+
+    hdr_file = sorted(glob.glob(data_dir +"*rames_removed.fits"))[0]
+    hdr_hdul = fits.open(hdr_file)
+    hdu0 = fits.PrimaryHDU()
+    hdu0.neader = hdr_file[0].header
+    hdr_hdul.close()
+
+    hduls_c.append(hdu0)
+    hduls_m.append(hdu0)
+
+    for pca in pcas:
+        rpcas = []
+        contrast = []
+        for channel in range(nchannels):
+            hdul = fits.open(data_dir + "pynpoint/"+output_name+"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca)+".fits")
+            data = hdul[0].data
+            rpcas.append(data)
+            contrast.append(np.power(10.0,data/-2.5)*NORMFACTOR)
+            hdul.close()
+        rpcas = np.array(rpcas)
+        contrast = np.array(contrast)
+
+        hdu = fits.ImageHDU(contrast,name = str(pca)+"PC")
+        hdu_2 = fits.ImageHDU(rpcas,name = str(pca)+"PC")
+        hduls_c.append(hdu)
+        hduls_m.append(hdu_2)
+
+    hdul_c = fits.HDUList(hduls_c)
+    hdul_m = fits.HDUList(hduls_m)
+
+    hdul_c.writeto(data_dir+"pyklip/" + instrument+ "_"+ planet_name + '_residuals.fits',
+                   overwrite=True, checksum=True, output_verify='fix')
+    hdul_m.writeto(data_dir+"pyklip/" + instrument+ "_"+ planet_name + '_magnitudes.fits',
+                   overwrite=True, checksum=True, output_verify='fix')
 
 # Save contrasts to a useable array
 def save_contrasts(nchannels,base_name,output_place,output_name):
