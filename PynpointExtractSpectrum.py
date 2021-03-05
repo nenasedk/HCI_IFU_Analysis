@@ -101,9 +101,8 @@ def main(args):
         DIT_SCIENCE = args.ditscience
     if args.ditflux is not None:
         DIT_FLUX = args.ditflux
-    cont = False
-    if args.cont is not None:
-        cont = True
+    cont = args.cont
+
     # Setup directories
     if not data_dir.endswith("/"):
         data_dir += "/"
@@ -140,6 +139,7 @@ def main(args):
 
     # Sanity chec the posn
     print(posn_pyn)
+    print(cont)
     if not cont:
         # Run ADI for each channel individually
         run_all_channels(nChannels,
@@ -352,12 +352,14 @@ def run_all_channels(nchannels, base_name, output_name, posn):
     # Write residuals in magnitude units
     hdu = fits.PrimaryHDU(residuals)
     hdul = fits.HDUList([hdu])
-    hdul.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_magnitudes.fits',overwrite = True)
+    hdul.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_magnitudes.fits',
+                 overwrite=True,checksum=True,output_verify='exception')
 
     # Write contrast in contrast units (surprise)
     hdu = fits.PrimaryHDU(contrasts)
     hdul = fits.HDUList([hdu])
-    hdul.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_residuals.fits',overwrite = True)
+    hdul.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_residuals.fits',
+                 overwrite=True,checksum=True,output_verify='exception')
 
 # Save contrasts to a useable array
 def save_contrasts(nchannels,base_name,output_place,output_name):
@@ -472,14 +474,11 @@ def preproc_files():
             hdu = fits.PrimaryHDU(shifted)
             hdu.header = header_hdul[0].header
             hdu.header.update(header_hdul[1].header)
-            hdu.header['NDIT'] = science.shape[1] 
-            hdu.header['NAXIS3'] = science.shape[1]
-            hdu.header['CDELT3'] = np.mean(np.diff(dataset.PAs.reshape(len(filelist),37)[:,0]))
-            hdu.header['WAVELENGTH'] = dataset.wvs[channel]
             hdu.header['ESO ADA POSANG'] = (dataset.PAs.reshape(len(filelist),37)[:,0][0]+ 180.0)
             hdu.header['ESO ADA POSANG END'] = (dataset.PAs.reshape(len(filelist),37)[:,0][-1]+ 180.0 )
             hdul_new = fits.HDUList([hdu])
-            hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + str(channel).zfill(3) + '_reduced.fits',overwrite=True)
+            hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + str(channel).zfill(3) + '_reduced.fits',
+                             overwrite=True,checksum=True,output_verify='exception')
             header_hdul.close()
 
             # Save for a full file, not channel by channel
@@ -489,15 +488,11 @@ def preproc_files():
         header_hdul = fits.open(filelist[0])
         hdu.header = header_hdul[0].header
         hdu.header.update(header_hdul[1].header)
-        hdu.header['NDIT'] = science.shape[1]
-        hdu.header['NAXIS3'] = science.shape[1] # Time/PA
-        hdu.header['NAXIS4'] = science.shape[0] # WLEN
-        hdu.header['CDELT3'] = np.mean(np.diff(dataset.PAs.reshape(len(filelist),37)[:,0]))
-        hdu.header['CDELT4'] = np.mean(np.diff(dataset.wvs[:37]))
         hdu.header['ESO ADA POSANG'] = (dataset.PAs.reshape(len(filelist),37)[:,0][0]+ 180.0)
         hdu.header['ESO ADA POSANG END'] = (dataset.PAs.reshape(len(filelist),37)[:,0][-1]+ 180.0 )
         hdul_new = fits.HDUList([hdu])
-        hdul_new.writeto(data_dir + "HR8799_"+instrument + 'pyklip_frames_removed.fits', overwrite = True)
+        hdul_new.writeto(data_dir + "HR8799_"+instrument + 'pyklip_frames_removed.fits',
+                         overwrite=True,checksum=True,output_verify='exception')
         header_hdul.close()
 
         # Repeat the exercise for the PSFs
@@ -523,7 +518,8 @@ def preproc_files():
             hdu = fits.PrimaryHDU(padded)
             hdu.header = psf_hdul[0].header
             hdul_new = fits.HDUList([hdu])  
-            hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + str(channel).zfill(3) + '_PSF.fits',overwrite = True)
+            hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + str(channel).zfill(3) + '_PSF.fits',
+                             overwrite=True,checksum=True,output_verify='exception')
         # Save wavelengths
         hdu = fits.PrimaryHDU(dataset.wvs[:37])
         hdul_new = fits.HDUList([hdu])

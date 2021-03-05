@@ -40,13 +40,16 @@ def main(args):
     data_dir = args.path
     instrument = args.instrument
     planet_name = args.name
+    # Setup directories
+    if not data_dir.endswith("/"):
+        data_dir += "/"
     posn_dict = read_astrometry(data_dir+"../",planet_name)
 
     # Spectrum - the flux calibrated spectrum
     spectrum = np.load(data_dir + instrument + "_" + planet_name + "_flux_10pc_7200K.npy")
 
     # Contrast unit spectrum.
-    contrasts = np.load(data_dir + instrument + "_" + planet_name + "contrasts.npy")
+    contrasts = np.load(data_dir + instrument + "_" + planet_name + "_contrasts.npy")
     # Residuals - the full frame residuals from processing, in contrast units
     # Might need to be careful about naming here.
     print("Loading Data")
@@ -78,19 +81,18 @@ def main(args):
     # First we need to get the uncorrelated error
     # This is a comnbination of residual error far from the star, and photometric error on the stellar psf
     # Both real units and fractional error are returned
-    print("Calculating Uncorrelated Errors...")
     total_err,frac_err,_,_ = uncorrelated_error(residuals,spectrum,nl,npca,flux_cal=True)
-    cont_err,frac_cont_err,_,_ = uncorrelated_error(residuals,contrasts,nl,npca)
+    #cont_err,frac_cont_err,_,_ = uncorrelated_error(residuals,contrasts,nl,npca)
 
     # Now we can compute the correlation and covariance matrices
     # The covariance matrix is normalised so that sqrt(diag(cov)) = uncorrelated error
-    print("Computing Covariance...")
     cor,cov = get_covariance(residuals,total_err,posn_dict,nl,npca)
-    cor_cont,cov_cont = get_covariance(residuals,cont_err,posn_dict,nl,npca)
+    #cor_cont,cov_cont = get_covariance(residuals,cont_err,posn_dict,nl,npca)
 
     print("Done!")
+
     # All of the outputs get combined and saved to a fits file
-    fits_output(spectrum,cov,cor, pcas=pcas, contrast = contrasts, cont_cov = cov_cont)
+    fits_output(spectrum,cov,cor, pcas=pcas)#, contrast = contrasts, cont_cov = cov_cont)
     return
 
 def create_circular_mask(h, w, center=None, radius=None):
@@ -109,6 +111,8 @@ def create_circular_mask(h, w, center=None, radius=None):
 # So much repeated code to clean up....
 # Apologies to future me.
 def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
+    print("Computing Covariance...")
+
     center = (residuals.shape[-2]/2,residuals.shape[-1]/2.0)
     width = 7
     r_in = posn_dict['Separation [mas]'][0]/1000/pxscale - width
@@ -118,6 +122,7 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
         cors = []
         covs = []
         for j in range(npca):
+            print("Found covariances for errors for ",j+1,"/",npca," PCs.")
             fluxes = []
             for i in range(nl):
                 # Stack and median subtract
@@ -194,6 +199,8 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
     # extract from background, compute SNR
     # add errors in quadrature
     # save as array with dims (npca,nl)
+    print("Calculating Uncorrelated Errors...")
+
     if "gpi" in instrument.lower():
         loc = 1200.
     elif "sphere" in instrument.lower():
@@ -218,7 +225,10 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
         psf_cube = fits.open(glob.glob(data_dir + psf_name)[0])
     elif "gpi" in instrument.lower():
         psf_name = glob.glob(data_dir + "../*_PSF_cube.fits")[0]
-        psf = fits.open(psf_name)[0].data
+        psf_hdul = fits.open(psf_name)
+        psf = psf_hdul[0].data        
+        psf_hdul.close()
+
         filelist = sorted(glob.glob(data_dir +"../*distorcorr.fits"))
         dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True)
         dataset.generate_psf_cube(41)
@@ -232,6 +242,7 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
     real_err = []
     if npca is not None:
         for j in range(npca):
+            print("Found uncorrelated errors for ",j+1,"/",npca," PCs.")
             flux_l = []
             uc_l = []
             tot_l = []
@@ -280,6 +291,7 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
         uncor_err = np.array(uncor_err)
         total_err = np.array(total_err)
         real_err = total_err*spectrum
+    del dataset
     return real_err, total_err, uncor_err, fluxes
 
 def photometric_error(psf_cube):

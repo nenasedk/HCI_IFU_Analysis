@@ -73,6 +73,7 @@ def main(args):
     # OBJECT/SCIENCE and OBJECT/FLUX integration times for normalisation
     parser.add_argument("-ds","--ditscience", type=float, required=False)
     parser.add_argument("-df","--ditflux", type=float, required=False)
+    parser.add_argument("-c","--cont", action='store_true',required=False)
 
     args = parser.parse_args(args)
 
@@ -112,11 +113,12 @@ def main(args):
     else: 
         posn_dict = read_astrometry(data_dir,planet_name)
         posn = (posn_dict["Separation [mas]"][0], posn_dict["PA [deg]"][0])
-    exspect, fm_matrix = KLIP_Extraction(dataset, PSF_cube, posn, numthreads)
-    contrasts,flux = get_spectrum(dataset, exspect,spot_to_star_ratio, stellar_model)
-    KLIP_fulframe(dataset, PSF_cube, posn, numthreads)
+    if not args.cont:
+        exspect, fm_matrix = KLIP_Extraction(dataset, PSF_cube, posn, numthreads)
+        contrasts,flux = get_spectrum(dataset, exspect,spot_to_star_ratio, stellar_model)
+        KLIP_fulframe(dataset, PSF_cube, posn, numthreads)
     combine_residuals()
-    return exspect, fm_matrix, contrasts, flux
+    return 
 
 def init_sphere():
     datacube = data_dir + "frames_removed.fits"
@@ -127,18 +129,6 @@ def init_sphere():
 
     # Sanity check on data shape
     # not a fan of hard coded number of channels
-   """ hdul = fits.open(datacube)
-    # Sphere has 39 wavelength bins for both YJH and YJ
-    if hdul[0].shape[0] == 39:
-        new_data = np.swapaxes(hdul[0].data,0,1)
-        hdu = fits.PrimaryHDU(new_data)
-        hdu.header = hdul[0].header
-        hdu.header['NAXIS3'] = new_data.shape[1]
-        hdu.header['NAXIS4'] = new_data.shape[0]
-        hdul_new = fits.HDUList([hdu])
-        datacube = data_dir + "pyklip_frames_removed.fits"
-        hdul_new.writeto(datacube,overwrite=True)"""
-
     fitsinfo = data_dir + "parang_removed.fits"
     wvinfo = data_dir + "wavelength.fits"
     hdul_w = fits.open(data_dir + wvinfo)
@@ -355,11 +345,13 @@ def combine_residuals():
         residuals.append(hdul[0].data)
         hdul.close()
     hdr_hdul = fits.open(files[0])
-    hdu = fits.PrimaryHDU(np.array(residuals))
-    hdu.header = hdr_hdul[0].header
-    hdu.header = {**hdu.header, **hdr_hdul[1].header}
+    hdr = hdr_hdul[0].header
+    hdr.update(hdr_hdul[1].header)
+    hdu = fits.PrimaryHDU(np.array(residuals,dtype = np.float64))
+    hdu.header = hdr
     hdul = fits.HDUList([hdu])
-    hdul.writeto(data_dir+"pyklip/" + instrument+ "_"+ planet_name + '_residuals.fits',overwrite = True)
+    hdul.writeto(data_dir+"pyklip/" + instrument+ "_"+ planet_name + '_residuals.fits',
+                 overwrite=True, checksum=True, output_verify='fix')
 
 
 
