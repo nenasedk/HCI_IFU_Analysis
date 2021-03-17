@@ -1,7 +1,12 @@
+# Author: Evert Nasedkin
+# email: nasedkinevert@gmail.com
+
 import sys,os
 os.environ["OMP_NUM_THREADS"] = "1"
-
 import numpy as np
+import argparse
+
+# Weird matplotlib imports for cluster use
 import matplotlib
 matplotlib.use('Agg') # set the backend before importing pyplot
 import matplotlib.pyplot as plt
@@ -11,26 +16,35 @@ from matplotlib import rc
 rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
 #rc('font',**{'family':'serif','serif':['Palatino']})
 rc('text', usetex=True)  
-import pyklip.instruments.GPI as GPI
 
 from astropy.io import fits
 from scipy.ndimage import rotate
 from photutils import CircularAperture, CircularAnnulus, aperture_photometry
-from Astrometry import get_astrometry, read_astrometry, init_sphere, init_gpi, ser_psfs
 
+import pyklip.instruments.GPI as GPI
 import vip_hci as vip
 from hciplot import plot_frames, plot_cubes
 from vip_hci.preproc import cube_recenter_2dfit, cube_recenter_dft_upsampling
 from vip_hci.negfc import firstguess, mcmc_negfc_sampling, show_corner_plot, show_walk_plot,confidence
 from vip_hci.andromeda import andromeda
 
-import argparse
+from Astrometry import get_astrometry, read_astrometry, init_sphere, init_gpi, init_psfs
 
+# There is a preprocessing function to help sort everything into the correct formats (GPI and SPHERE)
+data_dir = "/u/nnas/data/HR8799/HR8799_AG_reduced/GPIK2/" #SPHERE-0101C0315A-20/channels/
+
+# Instrument name, and optionally the band (ie GPIH, SPHEREYJ)
 instrument = "GPI"
-planet_name = "HR8799"
+planet_name = "HR8799e" # Name to give to all outputs
+distance = 41.2925 #pc
+
 numthreads = 35
 pixscale = 0.00746
 fwhm = 3.5
+
+DIT_SCIENCE = 64.0 # Set with argparse
+DIT_FLUX = 4.0 # Set with argparse
+NORMFACTOR = 1.0 # updated based on instrument and/or DITS
 
 def main(args):
     sys.path.append(os.getcwd())
@@ -38,12 +52,23 @@ def main(args):
     global data_dir 
     global instrument
     global planet_name
+    global DIT_SCIENCE
+    global DIT_FLUX
 
+    # Let's read in what we need
     parser = argparse.ArgumentParser()
+    # path to the data
     parser.add_argument("path", type=str, default= "/u/nnas/data/")
+    # What instrument are we using - expects: SPHEREYJH, SPHEREYJ, GPIH, GPIK1, GPIK2
     parser.add_argument("instrument", type=str, default= "GPI")
+    # Name of the planet we're looking at 
     parser.add_argument("name", type=str, default= "HR8799")   
+    # Separation in mas and posn in PA (two floats for input)
     parser.add_argument("posn", type=float, nargs = "+")
+    # OBJECT/SCIENCE and OBJECT/FLUX integration times for normalisation
+    parser.add_argument("-ds","--ditscience", type=float, required=False)
+    parser.add_argument("-df","--ditflux", type=float, required=False)
+    parser.add_argument("-c","--cont", action='store_true',required=False)
     args = parser.parse_args(args)
 
     data_dir = args.path
@@ -51,6 +76,7 @@ def main(args):
     planet_name = args.name
     guesssep, guesspa = args.posn
     guessflux = 5e-5
+
     if not data_dir.endswith("/"):
         data_dir += "/"
     if not os.path.isdir(data_dir + "andromeda"):
@@ -60,19 +86,19 @@ def main(args):
 
     science,angles,wlen,psfs = init()
 
+    # Check for KLIP astrometry and either read in or create
     if not os.path.exists(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):
         if "gpi" in instrument.lower():
             dataset = init_gpi(data_dir)
-            pixscale = 0.0162
         elif "sphere" in instrument.lower():
             dataset = init_sphere(data_dir)
-            pixscale = 0.00746
-
         PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
+        # posn is in sep [mas] and PA [degree], we need offsets in x and y px
         posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
-    else: 
-        posn_dict = read_astrometry(data_dir,planet_name)
-        posn = (posn_dict["Px RA offset [px]"][0], posn_dict["Px Dec offset [px]"][0])
+
+    # read_astrometry gives offsets in x,y, need to compute absolute posns
+    posn_dict = read_astrometry(data_dir,planet_name)
+    posn = (-1*posn_dict["Px RA offset [px]"][0], -1*posn_dict["Px Dec offset [px]"][0])
     contrasts, snrs = run_andromeda(science,angles,wlen,psfs)
     aperture_phot_extract(contrasts,((posn[0]/1000/pixscale)+science.shape[2],posn[1]+science.shape[3]))
     return
@@ -150,11 +176,6 @@ def init():
         header_hdul = fits.open(filelist[0])
         hdu.header = header_hdul[0].header
         hdu.header.update(header_hdul[1].header)
-        hdu.header['NDIT'] = science.shape[1]
-        hdu.header['NAXIS3'] = science.shape[1] # Time/PA
-        hdu.header['NAXIS4'] = science.shape[0] # WLEN
-        hdu.header['CDELT3'] = np.mean(np.diff(dataset.PAs.reshape(len(filelist),37)[:,0]))
-        hdu.header['CDELT4'] = np.mean(np.diff(dataset.wvs[:37]))
         hdu.header['ESO ADA POSANG'] = (dataset.PAs.reshape(len(filelist),37)[:,0][0]+ 180.0)
         hdu.header['ESO ADA POSANG END'] = (dataset.PAs.reshape(len(filelist),37)[:,0][-1]+ 180.0 )
         hdul_new = fits.HDUList([hdu])
@@ -179,7 +200,7 @@ def init():
     fwhm_fit = vip.var.fit_2dgaussian(psfs[0,0], crop=True, cropsize=11, debug=False)
     fwhm = np.mean(np.array([fwhm_fit['fwhm_y'],fwhm_fit['fwhm_x']])) # fit for fwhm
 
-    return science,angles,wlen,psfs
+    return science, angles, wlen, psfs
 
 def run_andromeda(data,angles,wlen,psfs):
     global pixscale
@@ -188,7 +209,7 @@ def run_andromeda(data,angles,wlen,psfs):
         pixscale = 7.46                                            # Pixscale [mas/px]
     else:
         diam_tel = 8.                                             # Telescope diameter [m]
-        pixscale = 14.22                                            # Pixscale [mas/px]
+        pixscale = 16.22                                            # Pixscale [mas/px]
     PIXSCALE_NYQUIST = (1/2.*np.mean(wlen)*1e-6/diam_tel)/np.pi*180*3600*1e3 # Pixscale at Shannon [mas/px]
     oversampling = PIXSCALE_NYQUIST /  pixscale                # Oversampling factor [1]
     fwhm = 7*oversampling
@@ -224,10 +245,10 @@ def run_andromeda(data,angles,wlen,psfs):
                                                                             owa=None,
                                                                             opt_method='lsq',
                                                                             fast=True,
-                                                                            nproc=1,
+                                                                            nproc=numthreads,
                                                                             homogeneous_variance=False,
-                                                                            ditimg = 64.,
-                                                                            ditpsf = 4.,
+                                                                            ditimg = DIT_SCIENCE,
+                                                                            ditpsf = DIT_FLUX,
                                                                             verbose = False)
         print(contrast)
         contrasts.append(contrast)

@@ -10,6 +10,8 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg') # set the backend before importing pyplot
 import matplotlib.pyplot as plt
+from matplotlib import rcParams
+from matplotlib import rc
 
 from astropy.io import fits
 import spectres
@@ -26,6 +28,10 @@ import pyklip.parallelized as parallelized
 
 # My own stuff
 from Astrometry import get_astrometry, read_astrometry
+#
+# Matplotlib styling
+#rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
+#rc('text', usetex=True)  
 
 ### KLIP Parameters ###
 numbasis = np.array([3,4,5,8,10,12,15]) # "k_klip", this can be a list of any size.
@@ -50,7 +56,7 @@ planet_name = "HR8799"
 pxscale = 0.01422
 DIT_SCIENCE = 64.0 # Set with argparse
 DIT_FLUX = 4.0 # Set with argparse
-
+skip = []
 def main(args):
     """
     This script will produce residuals and contrasts using Pynpoint for
@@ -62,8 +68,10 @@ def main(args):
 
     global data_dir 
     global instrument
-    global planet_name    
-
+    global planet_name   
+    global DIT_SCIENCE
+    global DIT_FLUX 
+    global pxscale
     # Let's read in what we need
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=str, default= "/u/nnas/data/")
@@ -83,6 +91,8 @@ def main(args):
     planet_name = args.name
     guesssep, guesspa = args.posn
     guessflux = 5e-5
+    print(instrument,planet_name)
+
     if args.ditscience is not None:
         DIT_SCIENCE = args.ditscience
     if args.ditflux is not None:
@@ -95,7 +105,6 @@ def main(args):
 
     # Read in stellar model - instrument name is important
     stellar_model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_" + instrument.upper() + "_fullfit_10pc.dat").T
-
     # initialize pyklip dataset
     if "gpi" in instrument.lower():
         dataset = init_gpi()
@@ -106,7 +115,7 @@ def main(args):
 
     # Setup PSFs, return a few different psfs with different units just in case
     PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
-
+    print(dataset.input.shape,PSF_cube.shape)
     # Get the planet astrometry
     if not os.path.exists(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):
         posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, planet_name)
@@ -132,7 +141,7 @@ def init_sphere():
     # not a fan of hard coded number of channels
     fitsinfo = data_dir + "parang_removed.fits"
     wvinfo = data_dir + "wavelength.fits"
-    hdul_w = fits.open(data_dir + wvinfo)
+    hdul_w = fits.open(wvinfo)
     # Sanity check on wlen units
     if np.mean(hdul_w[0].data)>100.:
         hdu_wlen = fits.PrimaryHDU([hdul_w[0].data/1000])
@@ -140,7 +149,7 @@ def init_sphere():
         hdu_wlen.header["UNITS"] = "micron"
         hdul_wlen = fits.HDUList([hdu_wlen])
         hdul_wlen.writeto(data_dir + "wavelength.fits",overwrite=True)
-
+    hdul_w.close()
     dataset = SPHERE.Ifs(datacube, 
                          psfcube,
                          fitsinfo,
@@ -161,7 +170,12 @@ def init_gpi():
         os.makedirs(data_dir + "pyklip", exist_ok=True) 
 
     filelist = sorted(glob.glob(data_dir +"*distorcorr.fits"))
-    dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True)
+    if "K1" in instrument:
+        dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True, skipslices=[0,1,36])
+    if "K2" in instrument:
+        dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True, skipslices=[0,1,2])
+    else:
+        dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True)
     return dataset
 
 def init_psfs(dataset):
@@ -176,8 +190,10 @@ def init_psfs(dataset):
     # generate_psf_cube has better background subtraction than generate_psfs
     if "sphere" in instrument.lower():
         return dataset.psfs,dataset.psfs,DIT_SCIENCE/DIT_FLUX
-    
-    dataset.generate_psf_cube(21)
+    if "K" in instrument:
+        dataset.generate_psfs(11)
+    else:
+        dataset.generate_psf_cube(21)
     # NOTE: not using pretty much all of the example calibration
     PSF_cube = dataset.psfs
     model_psf_sum = np.nansum(PSF_cube, axis=(1,2))
@@ -257,7 +273,9 @@ def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
 def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
     # Convert the extracted spectrum into contrast and flux units
     # spot_to_star_ratio - different for GPI and SPHERE
-     
+    exspect_load = np.load(data_dir + "pyklip/exspect.npy")
+    print("Echeck")
+    print(exspect[0]-exspect_load[0])
     # Useful constants
     num_k_klip = len(numbasis) # how many k_klips running
     N_frames = len(dataset.input)
@@ -275,7 +293,6 @@ def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
     for i in range(num_k_klip):
         ax.plot(wlen,exspect[i]*spot_to_star_ratio,label=str(numbasis[i]),alpha=0.5)
     ax.plot(wlen,m_cont*spot_to_star_ratio,label = 'Mean',linewidth=4)
-    ax.set_ylim(0.0,3e-5)
     plt.legend()
     plt.savefig(data_dir + "pyklip/" + instrument + "_" + planet_name +"contrasts_KLIP.pdf")
 
@@ -283,12 +300,17 @@ def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
 
     # Flux figure
     fig,ax = plt.subplots(figsize = (16,10))
-
+    print(distance, spot_to_star_ratio, stellar_model.shape,'\n')
+    sm = stellar_model[1]
+    if "K1" in instrument:
+        sm = sm.delete([0,1,36])
+    elif "K2" in instrument:
+        sm = sm.delete([0,1,2])
     for i in range(num_k_klip):
-        ax.plot(wlen,exspect[i]*spot_to_star_ratio*stellar_model[1]*(distance/10.)**2,label=str(numbasis[i]),alpha=0.5)
-    ax.plot(wlen,m_cont*spot_to_star_ratio*stellar_model[1]*(distance/10.)**2 ,label = 'Mean',linewidth=4)
+        ax.plot(wlen,exspect[i,:]*spot_to_star_ratio*sm*(distance/10.)**2,label=str(numbasis[i]),alpha=0.5)
+    ax.plot(wlen,m_cont*spot_to_star_ratio*sm*(distance/10.)**2 ,label = 'Mean',linewidth=4)
     ax.set_xlabel("Wavelength [micron]")
-    ax.set_ylabel(r"Flux Density [W/m$^{2}/\mu$m")
+    ax.set_ylabel("Flux Density [W/m2/micron]")
     ax.set_title(planet_name + " " + instrument + " Flux KLIP")
     plt.legend()
     plt.savefig(data_dir + "pyklip/" + instrument + "_" + planet_name +"flux_KLIP.pdf")
@@ -297,13 +319,15 @@ def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
     np.save(data_dir +"pyklip/" + instrument + "_" + planet_name + "_contrasts",
             exspect*spot_to_star_ratio)
     np.save(data_dir +"pyklip/"+ instrument + "_" + planet_name + "_flux_10pc_7200K",
-            exspect*spot_to_star_ratio*stellar_model[1]*(distance/10.)**2)
-   
+            exspect*spot_to_star_ratio*sm*((distance/10.)**2))
+    np.save(data_dir +"pyklip/"+ instrument + "_" + planet_name + "spot_to_star_ratio",spot_to_star_ratio)
+
     # Contrast, Flux Density (W/m^2/micron)
-    return exspect*spot_to_star_ratio,exspect*spot_to_star_ratio*stellar_model[1]*(distance/10.)**2
+    return exspect*spot_to_star_ratio,exspect*spot_to_star_ratio*sm*(distance/10.)**2
 
 
 def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
+    print("Running full frame KLIP for residuals.\n")
     # Run KLIP again at the end so we can get the full residuals,
     # which we need for the covariance matrix later.
     planet_sep, planet_pa = posn
@@ -321,7 +345,7 @@ def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
     ###### Now run KLIP! ######
     fm.klip_dataset(dataset, fm_class,
                     fileprefix="fullframe",
-                    annuli=9,
+                    annuli=12,
                     subsections=10,
                     movement=movement,
                     #flux_overlap = 0.1,
@@ -343,7 +367,7 @@ def combine_residuals():
     hduls = []
     hdu0 = fits.PrimaryHDU()
     hdul = fits.open(files[0])
-    hd0.header = hdul[0].header
+    hdu0.header = hdul[0].header
     hdul.close()
 
     hduls.append(hdu0)

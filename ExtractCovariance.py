@@ -15,10 +15,14 @@ from matplotlib import rcParams
 from matplotlib import rc
 
 # My own files
-from Astrometry import get_astrometry, read_astrometry, init_sphere, init_gpi, set_psfs
+from Astrometry import get_astrometry, read_astrometry, init_sphere, init_gpi, init_psfs
 
 # Exoplanet stuff
 import pyklip.instruments.GPI as GPI
+
+# Matplotlib styling
+#rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
+#rc('text', usetex=True)  
 
 data_dir = "/u/nnas/data/HR8799/HR8799_AG_reduced/GPIK2/" #SPHERE-0101C0315A-20/channels/
 distance = 41.2925 #pc
@@ -26,6 +30,8 @@ instrument = "GPI"
 planet_name = "HR8799e"
 pxscale = 0.00746
 CENTER = (0.,0.)
+nFrames = 1
+
 def main(args):
     sys.path.append(os.getcwd())
 
@@ -65,12 +71,14 @@ def main(args):
         residuals = np.load(data_dir + instrument + "_" + planet_name + "_residuals.npy")
     elif os.path.exists(data_dir + instrument + "_" + planet_name + "_residuals.fits"):
         hdul = fits.open(data_dir + instrument + "_" + planet_name + "_residuals.fits")
-        residuals = [hdu.data for hdu in hduls]
+        residuals = [hdu.data for hdu in hdul[1:]]
         if "gpi" in instrument.lower():
-            CENTER = (hdul[0].header['PSFCENTX'],hdul[0].header['PSFCENTX'])
+            try: 
+                CENTER = (hdul[1].header['PSFCENTX'],hdul[1].header['PSFCENTX'])
+            except:
+                CENTER = (hdul[0].header['PSFCENTX'],hdul[0].header['PSFCENTX'])
         else:
             CENTER = (residual.shape[-2]/2.0,residual.shape[-1]/2.0)
-        hdul.close()
     else:
         print("No residual file found!")
         return
@@ -227,6 +235,7 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
     # extract from background, compute SNR
     # add errors in quadrature
     # save as array with dims (npca,nl)
+    global nFrames
     print("Calculating Uncorrelated Errors...")
 
     if "gpi" in instrument.lower():
@@ -248,9 +257,11 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
     # Must be at least 30 px wide (for background error)
     if instrument.lower() == "sphereyj":
         psf_cube = fits.open(glob.glob(data_dir + psf_name)[0])
+        nFrames = psf_cube.shape[1]
         psf_cube = np.nanmean(psf_cube,axis=1)
     elif instrument.lower() == "sphereyjh":
         psf_cube = fits.open(glob.glob(data_dir + psf_name)[0])
+        nFrames = 1
     elif "gpi" in instrument.lower():
         psf_name = glob.glob(data_dir + "../*_PSF_cube.fits")[0]
         psf_hdul = fits.open(psf_name)
@@ -259,6 +270,7 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
         filelist = sorted(glob.glob(data_dir +"../*distorcorr.fits"))
         dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True)
         dataset.generate_psf_cube(41)
+        nFrames = np.size(np.unique(dataset.filenums))
 
         psf_cube = dataset.psfs
         psf_hdul.close()
@@ -332,6 +344,7 @@ def photometric_error(psf_cube):
     #            noise annulus between 9-16px radii
     #            different npix is accounted for
     std = []
+    bkgs = []
     flux = []
     for frame in psf_cube[:]:
         y_img, x_img = np.indices(frame.shape, dtype=float)
@@ -345,9 +358,11 @@ def photometric_error(psf_cube):
         
         background_std = np.std(frame[noise_annulus])
         std.append(np.sum(frame[psf_mask])/np.sqrt((background_sum* n_psf/n_ann) + np.sum(frame[psf_mask])) )
+        bkgs.append(np.std(frame[noise_annulus]))
         flux.append(np.sum(frame[psf_mask])) 
-    std = np.array(std)
+    std = np.array(std)/np.sqrt(nFrames)
     flux = np.array(flux)
+    bkgs = np.array(bkgs)
     return std/flux
 
 def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,cont_cov = None):

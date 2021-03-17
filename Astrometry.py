@@ -15,25 +15,48 @@ import pyklip.parallelized as parallelized
 import matplotlib
 matplotlib.use('Agg') # set the backend before importing pyplot
 import matplotlib.pyplot as plt
+from matplotlib import rcParams
+from matplotlib import rc
+
 from astropy.io import fits
 import spectres
 
+# Matplotlib styling
+#rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
+#rc('text', usetex=True)  
+
 instrument = "GPI"
-numthreads = 8
+numthreads = 4
 
 def init_sphere(data_dir):
     global instrument
-    instrument = "SPHERE"
-    datacube = data_dir + "science_pyklip.fits"
-    psfcube = data_dir + "psf_pyklip.fits"
+    instrument = 'SPHERE'
+
+    datacube = data_dir + "frames_removed.fits"
+    if os.path.isfile(data_dir + "psf_satellites_calibrated.fits"):
+        psfcube = data_dir + "psf_satellites_calibrated.fits"
+    else:
+        psfcube = data_dir + "psf_cube.fits"
+
+    # Sanity check on data shape
+    # not a fan of hard coded number of channels
     fitsinfo = data_dir + "parang_removed.fits"
     wvinfo = data_dir + "wavelength.fits"
+    hdul_w = fits.open(wvinfo)
+    # Sanity check on wlen units
+    if np.mean(hdul_w[0].data)>100.:
+        hdu_wlen = fits.PrimaryHDU([hdul_w[0].data/1000])
+        hdu_wlen.header = hdul_w[0].header
+        hdu_wlen.header["UNITS"] = "micron"
+        hdul_wlen = fits.HDUList([hdu_wlen])
+        hdul_wlen.writeto(data_dir + "wavelength.fits",overwrite=True)
+
     dataset = SPHERE.Ifs(datacube, 
                          psfcube,
                          fitsinfo,
                          wvinfo, 
                          nan_mask_boxsize=9,
-                         psf_cube_size = 11 )
+                         psf_cube_size = 13)
     print("read in data")
     return dataset
 
@@ -41,26 +64,45 @@ def init_gpi(data_dir):
     # GPI
     # Original files 131117,131118,160919
     # PynPoint structure GPIH, GPIK1, GPIK2
-    global instrument
-    instrument = "GPI"
-    psf = fits.open(data_dir  + "*original_PSF_cube.fits")[0].data
+    psf_name = glob.glob(data_dir + "*_PSF_cube.fits")[0]
+
+    psf = fits.open(psf_name)[0].data
     if not os.path.isdir(data_dir + "pyklip"):
         os.makedirs(data_dir + "pyklip", exist_ok=True) 
 
-    filelist = glob.glob(data_dir +"*distorcorr.fits")
-    dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf)
+    filelist = sorted(glob.glob(data_dir +"*distorcorr.fits"))
+    dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True)
     return dataset
 
-def set_psfs(dataset):
-    ###### Useful values based on dataset ######
+
+def init_psfs(dataset):
+    if "GPI" in dataset.__class__.__name__:
+        instrument = "GPI" + dataset.band
+    else:
+        instrument = "SPHERE"
+    # useful constants
     N_frames = len(dataset.input)
     N_cubes = np.size(np.unique(dataset.filenums))
     nl = N_frames // N_cubes
-    dataset.generate_psfs(10)
-    # in this case model_psfs has shape (N_lambda, 20, 20)
+
     # The units of your model PSF are important, the return spectrum will be
     # relative to the input PSF model, see next example
+    # generate_psf_cube has better background subtraction than generate_psfs
+    if "sphere" in instrument.lower():
+        # Not letting me get this value from the dataset obj for some reason.
+        # Taken from GPI SPHERE IFS class
+        #psfs_wvs = np.unique(datset.wvs)
+        #star_peaks = np.nanmax(dataset.psfs,axis=(1,2))
+        #dn_per_contrast = np.squeeze(np.array([star_peaks[np.where(psfs_wvs==wv)[0]] for wv in dataset.wvs]))
 
+        return dataset.psfs, dataset.psfs, dataset.dn_per_contrast
+    
+    if "K" in instrument:
+        # In case we're skipping a few K band channels
+        dataset.generate_psfs(11)
+    else:
+        dataset.generate_psf_cube(21)
+    # NOTE: not using pretty much all of the example calibration
     PSF_cube = dataset.psfs
     model_psf_sum = np.nansum(PSF_cube, axis=(1,2))
     model_psf_peak = np.nanmax(PSF_cube, axis=(1,2))
@@ -68,14 +110,15 @@ def set_psfs(dataset):
     # Now divide the sum by the peak for each wavelength slice
     aper_over_peak_ratio = model_psf_sum/model_psf_peak
 
+    # NOTE: THIS IS THE IMPORTANT ONE FOR FLUX CALIBRATION
     # star-to-spot calibration factor
     band = dataset.prihdrs[0]['APODIZER'].split('_')[1]
     spot_to_star_ratio = dataset.spot_ratio[band]
 
+    # not using calibrated model
     spot_peak_spectrum = \
         np.median(dataset.spot_flux.reshape(len(dataset.spot_flux)//nl, nl), axis=0)
     calibfactor = np.array(aper_over_peak_ratio*spot_peak_spectrum / spot_to_star_ratio)
-    print(calibfactor)
     # calibrated_PSF_model is the stellar flux in counts for each wavelength
     calibrated_PSF_model = calibfactor[:,None,None]*PSF_cube
     return PSF_cube, calibrated_PSF_model, spot_to_star_ratio
@@ -88,7 +131,9 @@ def get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, pl
     #### Astrometry Prep ###
     #guessspec = np.array(klipcontrast) #your_spectrum # should be 1-D array with number of elements = np.size(np.unique(dataset.wvs))
     # klipcontrast read from residuals below
-    numbasis=np.array([5,10])
+    numbasis=np.array([10,15])
+    if "Ifs" in dataset.__class__.__name__:
+        instrument = "SPHERE"
     # initialize the FM Planet PSF class
     if "sphere" in instrument.lower():
         dataind = 0 # For some reason the outputs for the fm are different
@@ -107,8 +152,8 @@ def get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, pl
     # You should change these to be suited to your data!
     outputdir = data_dir + "pyklip/" # where to write the output files
     prefix = instrument + "_" + planet_name + "_fmpsf" # fileprefix for the output files
-    annulus_bounds = [[guesssep-15, guesssep+15]] # one annulus centered on the planet, one for covariance
-    subsections = 1 # we are not breaking up the annulus
+    annulus_bounds = [[guesssep-11, guesssep+11]] # one annulus centered on the planet, one for covariance
+    subsections = 2 # we are not breaking up the annulus
     padding = 0 # we are not padding our zones
     movement = 4 # we are using an conservative exclusion criteria of 4 pixels
     numbasis = [5,10]
@@ -123,15 +168,13 @@ def get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, pl
     fm_hdu = fits.open(output_prefix + "-fmpsf-KLmodes-all.fits")
     data_hdu = fits.open(output_prefix + "-klipped-KLmodes-all.fits")
 
-    # get FM frame, use KL=7
-    # get FM frame, use KL=7
-
-    fm_frame = fm_hdu[dataind].data[1]
+    # get FM frame, use KL=10
+    fm_frame = fm_hdu[dataind].data[0]
     fm_centx = fm_hdu[dataind].header['PSFCENTX']
     fm_centy = fm_hdu[dataind].header['PSFCENTY']
 
-    # get data_stamp frame, use KL=7
-    data_frame = data_hdu[dataind].data[1]
+    # get data_stamp frame, use KL=10
+    data_frame = data_hdu[dataind].data[0]
     data_centx = data_hdu[dataind].header["PSFCENTX"]
     data_centy = data_hdu[dataind].header["PSFCENTY"]
 
@@ -193,33 +236,33 @@ def plot_astrometry(fit,data_dir,planet_name):
     ax1 = fig.add_subplot(411)
     ax1.plot(chain[:,:,0].T, '-', color='k', alpha=0.3)
     ax1.set_xlabel("Steps")
-    ax1.set_ylabel(r"$\Delta$ RA")
+    ax1.set_ylabel("RA")
 
     # plot Dec offset
     ax2 = fig.add_subplot(412)
     ax2.plot(chain[:,:,1].T, '-', color='k', alpha=0.3)
     ax2.set_xlabel("Steps")
-    ax2.set_ylabel(r"$\Delta$ Dec")
+    ax2.set_ylabel("Dec")
 
     # plot flux scaling
     ax3 = fig.add_subplot(413)
     ax3.plot(chain[:,:,2].T, '-', color='k', alpha=0.3)
     ax3.set_xlabel("Steps")
-    ax3.set_ylabel(r"$\alpha$")
+    ax3.set_ylabel("alpha")
 
     # plot hyperparameters.. we only have one for this example: the correlation length
     ax4 = fig.add_subplot(414)
     ax4.plot(chain[:,:,3].T, '-', color='k', alpha=0.3)
     ax4.set_xlabel("Steps")
-    ax4.set_ylabel(r"$l$")
+    ax4.set_ylabel("l")
     plt.savefig(data_dir + "pyklip/"+planet_name+"_astrometry_walkers.pdf")
 
     plt.clf()
-    # Corner Plots
-    fig = plt.figure()
-    fig = fit.make_corner_plot(fig=fig)
-    plt.savefig(data_dir+"pyklip/"+planet_name+"_astrometry_corner.pdf")
-    plt.clf()
+    # Corner Plots are broken for some reason
+    #fig = plt.figure()
+    #fig = fit.make_corner_plot(fig=fig)
+    #plt.savefig(data_dir+"pyklip/"+planet_name+"_astrometry_corner.pdf")
+    #plt.clf()
     # Residual Plots
     fig = plt.figure()
     fig = fit.best_fit_and_residuals(fig=fig)
