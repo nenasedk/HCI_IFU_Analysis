@@ -4,6 +4,8 @@
 import sys,os
 os.environ["OMP_NUM_THREADS"] = "1"
 import numpy as np
+import glob
+import shutil
 import argparse
 
 # Weird matplotlib imports for cluster use
@@ -13,9 +15,9 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import StrMethodFormatter
 from matplotlib import rcParams
 from matplotlib import rc
-rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
+#rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
 #rc('font',**{'family':'serif','serif':['Palatino']})
-rc('text', usetex=True)  
+#rc('text', usetex=True)  
 
 from astropy.io import fits
 from scipy.ndimage import rotate
@@ -24,7 +26,7 @@ from photutils import CircularAperture, CircularAnnulus, aperture_photometry
 import pyklip.instruments.GPI as GPI
 import vip_hci as vip
 from hciplot import plot_frames, plot_cubes
-from vip_hci.preproc import cube_recenter_2dfit, cube_recenter_dft_upsampling
+from vip_hci.preproc import cube_recenter_2dfit, cube_recenter_dft_upsampling, cube_shift, cube_crop_frames
 from vip_hci.negfc import firstguess, mcmc_negfc_sampling, show_corner_plot, show_walk_plot,confidence
 from vip_hci.andromeda import andromeda
 
@@ -38,13 +40,14 @@ instrument = "GPI"
 planet_name = "HR8799e" # Name to give to all outputs
 distance = 41.2925 #pc
 
-numthreads = 35
+numthreads = 10
 pixscale = 0.00746
 fwhm = 3.5
 
 DIT_SCIENCE = 64.0 # Set with argparse
 DIT_FLUX = 4.0 # Set with argparse
 NORMFACTOR = 1.0 # updated based on instrument and/or DITS
+CENTER = (0,0)
 
 def main(args):
     sys.path.append(os.getcwd())
@@ -76,6 +79,10 @@ def main(args):
     planet_name = args.name
     guesssep, guesspa = args.posn
     guessflux = 5e-5
+    if args.ditscience is not None:
+        DIT_SCIENCE = args.ditscience
+    if args.ditflux is not None:
+        DIT_FLUX = args.ditflux
 
     if not data_dir.endswith("/"):
         data_dir += "/"
@@ -98,13 +105,14 @@ def main(args):
 
     # read_astrometry gives offsets in x,y, need to compute absolute posns
     posn_dict = read_astrometry(data_dir,planet_name)
-    posn = (-1*posn_dict["Px RA offset [px]"][0], -1*posn_dict["Px Dec offset [px]"][0])
+    posn = (-1*posn_dict["Px RA offset [px]"][0] +CENTER[0], -1*posn_dict["Px Dec offset [px]"][0]+CENTER[1])
     contrasts, snrs = run_andromeda(science,angles,wlen,psfs)
-    aperture_phot_extract(contrasts,((posn[0]/1000/pixscale)+science.shape[2],posn[1]+science.shape[3]))
+    aperture_phot_extract(contrasts,posn)
     return
 
 def init():
     global pixscale
+    global CENTER
     if "sphere" in instrument.lower():
         science_name = "frames_removed.fits"
         if os.path.isfile(data_dir + "psf_satellites_calibrated.fits"):
@@ -125,6 +133,8 @@ def init():
         hdul = fits.open(data_dir + science_name)
         science = hdul[0].data
         hdul.close()
+        CENTER = (science.shape[-2]/2.0,science.shape[-1]/2.0)
+
         # Parangs
         ang_hdul = fits.open(data_dir + parang_name)
         angles = ang_hdul[0].data
@@ -139,7 +149,7 @@ def init():
         psf_hdul.close()
 
     elif "gpi" in instrument.lower():
-        pixscale = 0.0162
+        pixscale =  0.014161
         science_name = "*distorcorr.fits"
         psf_name = glob.glob(data_dir + "*-original_PSF_cube.fits")[0]
         psf_hdul = fits.open(psf_name)
@@ -149,19 +159,18 @@ def init():
         # Assuming standard GPI naming scheme
         filelist = sorted(glob.glob(data_dir +science_name))
         dataset = GPI.GPIData(filelist, highpass=True, PSF_cube = psfs,recalc_centers=True)
-        dataset.generate_psf_cube(41)
-
+        dataset.generate_psf_cube(30)
+        psfs = dataset.psfs
         band = dataset.prihdrs[0]['APODIZER'].split('_')[1]
         spot_to_star_ratio = dataset.spot_ratio[band]
         NORMFACTOR = spot_to_star_ratio
+        CENTER = (np.mean(dataset.centers[:,0]),np.mean(dataset.centers[:,1]))
 
         # Need to order the GPI data for pynpoint
         shape = dataset.input.shape
         science = dataset.input.reshape(len(filelist),37,shape[-2],shape[-1])
         science = np.swapaxes(science,0,1)
         science_pyn = []
-        if data_shape is None:
-                data_shape = science.shape
         for channel,frame in enumerate(science[:]):
             # The PSF center isn't aligned with the image center, so let's fix that
             centx = dataset.centers.reshape(len(filelist),37,2)[:,channel,0]
@@ -179,40 +188,46 @@ def init():
         hdu.header['ESO ADA POSANG'] = (dataset.PAs.reshape(len(filelist),37)[:,0][0]+ 180.0)
         hdu.header['ESO ADA POSANG END'] = (dataset.PAs.reshape(len(filelist),37)[:,0][-1]+ 180.0 )
         hdul_new = fits.HDUList([hdu])
-        hdul_new.writeto(data_dir + "HR8799_"+instrument + 'pyklip_frames_removed.fits', overwrite = True)
+        hdul_new.writeto(data_dir + "HR8799_"+instrument + 'pyklip_frames_removed.fits', overwrite = True,
+                         checksum=True,output_verify='exception')
         header_hdul.close()
         
         # Save wavelengths
         hdu = fits.PrimaryHDU(dataset.wvs[:37])
         hdul_new = fits.HDUList([hdu])
         hdul_new.writeto(data_dir + "wavelength.fits",overwrite = True)
-
+        wlen = dataset.wvs[:37]
         # pyklip does weird things with the PAs, so let's fix that.
         # Keep or remove dataset.ifs_rotation? GPI IFS is rotated 23.5 deg, 
-        pas = (dataset.PAs.reshape(len(filelist),37)[:,0] + 180.0)
-        hdu = fits.PrimaryHDU(pas)
+        angles = (dataset.PAs.reshape(len(filelist),37)[:,0] + 180.0)
+        hdu = fits.PrimaryHDU(angles)
         hdul_new = fits.HDUList([hdu])
         hdul_new.writeto(data_dir + "parangs.fits",overwrite = True)
         del dataset
-
-
-    global fwhm
-    fwhm_fit = vip.var.fit_2dgaussian(psfs[0,0], crop=True, cropsize=11, debug=False)
-    fwhm = np.mean(np.array([fwhm_fit['fwhm_y'],fwhm_fit['fwhm_x']])) # fit for fwhm
-
+    set_fwhm(psfs,0)
     return science, angles, wlen, psfs
+
+# Get the PSF FWHM for each channel
+def set_fwhm(psfs,channel):
+    global fwhm
+    if len(psfs.shape) ==4 :
+        fwhm_fit = vip.var.fit_2dgaussian(psfs[int(channel),0], crop=True, cropsize=8, debug=False)
+    else:
+        fwhm_fit = vip.var.fit_2dgaussian(psfs[int(channel)], crop=True, cropsize=8, debug=False)
+
+    fwhm = np.mean(np.array([fwhm_fit['fwhm_y'],fwhm_fit['fwhm_x']]))*pixscale # fit for fwhm
+    return
 
 def run_andromeda(data,angles,wlen,psfs):
     global pixscale
     if "sphere" in instrument.lower():
-        diam_tel = 8.3                                             # Telescope diameter [m]
-        pixscale = 7.46                                            # Pixscale [mas/px]
+        diam_tel = 8.3                                            # Telescope diameter [m]
+        pixscale = 7.46                                           # Pixscale [mas/px]
     else:
-        diam_tel = 8.                                             # Telescope diameter [m]
-        pixscale = 16.22                                            # Pixscale [mas/px]
-    PIXSCALE_NYQUIST = (1/2.*np.mean(wlen)*1e-6/diam_tel)/np.pi*180*3600*1e3 # Pixscale at Shannon [mas/px]
-    oversampling = PIXSCALE_NYQUIST /  pixscale                # Oversampling factor [1]
-    fwhm = 7*oversampling
+        diam_tel = 10.                                             # Telescope diameter [m]
+        pixscale =  0.014161 *1000                                 # Pixscale [mas/px]
+    #PIXSCALE_NYQUIST = (1/2.*np.mean(wlen)*1e-6/diam_tel)/np.pi*180*3600*1e3 # Pixscale at Shannon [mas/px]
+    #oversampling = PIXSCALE_NYQUIST /  pixscale                # Oversampling factor [1]
     contrasts = []
     snrs = []
     c_norms = []
@@ -221,36 +236,52 @@ def run_andromeda(data,angles,wlen,psfs):
     output_dir = data_dir + "andromeda/"
     # Iterate through wavelengths
     # data must be (wlen, time, x, y)
+    #psfs = cube_crop_frames(psfs,10)
+    np.save(output_dir + instrument+ "_"+ planet_name +"_psfs",psfs)
+
     for i,stack in enumerate(data):
+        set_fwhm(psfs,i)
         if len(psfs.shape)==4:
             size = psfs.shape[2]
-        else:
-            size = psfs.shape[1]
-        
-        psf, shy1, shx1 = cube_recenter_2dfit(psfs[i,:,int(size/2-11):int(size/2+11),int(size/2-11):int(size/2+11)], 
-                                            xy=(11,11), fwhm=fwhm, nproc=1, subi_size=6, 
-                                            model='gauss', negative=False, full_output=True, debug=False,plot=False)
+            psfs = np.mean(psfs,axis=1)
+            psf, shy1, shx1 = cube_recenter_2dfit(psfs[i,:,int(size/2-11):int(size/2+11),int(size/2-11):int(size/2+11)], 
+                                    xy=(11,11), fwhm=fwhm, nproc=1, subi_size=6, 
+                                    model='gauss', negative=False, full_output=True, debug=False,plot=False)
 
-        cube, shy1, shx1 = cube_recenter_2dfit(stack[:,:-1,:-1], 
-                                               xy=(int(stack.shape[1]/2),int(stack.shape[2]/2)), fwhm=fwhm, nproc=1, subi_size=6, 
-                                               model='gauss', negative=False, full_output=True, debug=False,plot=False)
+            cube, shy1, shx1 = cube_recenter_2dfit(stack[:,:-1,:-1], 
+                                               xy=(int(CENTER[0]),int(CENTER[1])), fwhm=fwhm, nproc=1, subi_size=6, 
+                                               model='gauss', negative=False, full_output=True, debug=False,plot=False)                        
+            psf = np.mean(psf,axis=1)
+
+        else:
+            psf = psfs[i]
+            cube = cube_shift(stack[:,:-1,:-1],
+                                -0.5,
+                                -0.5)
+                                #(stack.shape[-1]/2.0 - CENTER[1])-0.5,
+                                #(stack.shape[-2]/2.0 - CENTER[0])-0.5)
+        ang = angles
+        if "sphere" in instrument.lower():
+            ang = -1*angles
+
+        PIXSCALE_NYQUIST = (1/2.*wlen[i]*1e-6/diam_tel)*180*3600*1e3/np.pi # Pixscale at Shannon [mas/px]
+        oversampling = PIXSCALE_NYQUIST /  pixscale                # Oversampling factor [1]
         contrast,snr,snr_norm,std_contrast,std_contrast_norm,_,_ = andromeda(cube=np.nan_to_num(cube),
                                                                             oversampling_fact=oversampling,
-                                                                            angles=-1*angles, 
-                                                                            psf=np.median(psf,axis=0),
-                                                                            filtering_fraction = 0.2,
-                                                                            min_sep=2.0,
-                                                                            iwa=2.0,
-                                                                            annuli_width = 1.2,
-                                                                            owa=None,
-                                                                            opt_method='lsq',
-                                                                            fast=True,
+                                                                            angles=ang, 
+                                                                            psf=psf,
+                                                                            filtering_fraction = 0.25,
+                                                                            min_sep=0.5,
+                                                                            iwa=4.0,
+                                                                            annuli_width = 1.0,
+                                                                            owa=40.,
+                                                                            opt_method='no',
+                                                                            fast=False,
                                                                             nproc=numthreads,
-                                                                            homogeneous_variance=False,
+                                                                            homogeneous_variance=True,
                                                                             ditimg = DIT_SCIENCE,
                                                                             ditpsf = DIT_FLUX,
-                                                                            verbose = False)
-        print(contrast)
+                                                                            verbose = True)
         contrasts.append(contrast)
         snrs.append(snr)
         stds.append(std_contrast)
@@ -264,7 +295,7 @@ def run_andromeda(data,angles,wlen,psfs):
 
     if not os.path.isdir(output_dir):
         os.makedirs(output_dir, exist_ok=True) 
-    np.save(output_dir + instrument+ "_"+ planet_name +"_contrast",contrasts)
+    np.save(output_dir + instrument+ "_"+ planet_name +"_contrastmap",contrasts)
     np.save(output_dir + instrument+ "_"+ planet_name +"_snr",snrs)
     np.save(output_dir + instrument+ "_"+ planet_name +"_stds",stds)
     np.save(output_dir + instrument+ "_"+ planet_name +"_c_norm",c_norms)
@@ -273,14 +304,21 @@ def run_andromeda(data,angles,wlen,psfs):
     hdu = fits.PrimaryHDU(contrasts)
     hdul_new = fits.HDUList([hdu])
     hdul_new.writeto(output_dir + instrument+ "_"+ planet_name + "_residuals.fits",overwrite=True)
-    hdul.close()
+
+    hdu = fits.PrimaryHDU(c_norms)
+    hdul_new = fits.HDUList([hdu])
+    hdul_new.writeto(output_dir + instrument+ "_"+ planet_name + "_normed.fits",overwrite=True)
+    hdu = fits.PrimaryHDU(snrs)
+    hdul_new = fits.HDUList([hdu])
+    hdul_new.writeto(output_dir + instrument+ "_"+ planet_name + "_snrs.fits",overwrite=True)
+
     return contrasts, snrs
 
 def aperture_phot_extract(contrasts,posn):
     mask = create_circular_mask(contrasts.shape[1],contrasts.shape[2],
                             center = posn, 
-                            radius = 3*fwhm)
-    aperture = CircularAperture([posn], r=3*fwhm)
+                            radius = 3)
+    aperture = CircularAperture([posn], r=3)
     spectrum = []
     for frame in contrasts:
         phot_table = aperture_photometry(frame,aperture)

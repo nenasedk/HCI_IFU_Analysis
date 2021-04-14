@@ -47,7 +47,7 @@ def main(args):
     args = parser.parse_args(args)
 
     if "gpi" in instrument.lower():
-        pxscale = 0.0162
+        pxscale = 0.014161
     elif "sphere" in instrument.lower():
         pxscale = 0.007462
 
@@ -239,11 +239,11 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
     print("Calculating Uncorrelated Errors...")
 
     if "gpi" in instrument.lower():
-        loc = 1200.
+        loc = 1100.
     elif "sphere" in instrument.lower():
         loc = 750.
     center = CENTER
-    width = 7
+    width = 3
     r_in = loc/1000/pxscale - width
     r_out = loc/1000/pxscale + width
     annulus_c = CircularAnnulus(center,r_in = r_in, r_out = r_out)
@@ -266,7 +266,6 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
         psf_name = glob.glob(data_dir + "../*_PSF_cube.fits")[0]
         psf_hdul = fits.open(psf_name)
         psf = psf_hdul[0].data        
-        print(psf.shape)
         filelist = sorted(glob.glob(data_dir +"../*distorcorr.fits"))
         dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True)
         dataset.generate_psf_cube(41)
@@ -277,7 +276,6 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
 
     # Fractional error on stellar psf
     phot_err = photometric_error(psf_cube)
-    print(phot_err)
     fluxes = []
     uncor_err = []
     total_err = []
@@ -294,11 +292,11 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
                 # Mask out planet (not sure if correct location)
                 # Get fluxes of all pixels within annulus
                 annulus = annulus_c.to_mask(method='center')
-
                 # Assuming contrast units for residuals
                 flux = annulus.multiply(med)[annulus.data>0]*stellar_model[i]
                 #frac_err = spectrum[j,i]/np.sqrt(np.sum(flux)*flux.shape[0]/16.0 + spectrum[j,i])
                 frac_err= np.std(flux)/spectrum[j,i] 
+                #frac_err = (1.0/np.sqrt(np.sum(flux)*16./flux.shape[0] + spectrum[j,i]))
                 flux_l.append(flux)
                 uc_l.append(frac_err)
                 tot_l.append(np.sqrt(frac_err**2 + phot_err[i]**2))
@@ -346,21 +344,23 @@ def photometric_error(psf_cube):
     std = []
     bkgs = []
     flux = []
+    errdict = {"GPIH": 60,"GPIK1":24,"GPIK2":20,"SPHEREYJH":72}
+
     for frame in psf_cube[:]:
         y_img, x_img = np.indices(frame.shape, dtype=float)
         r_img = np.sqrt((x_img - frame.shape[0]/2.0)**2 + (y_img - frame.shape[1]/2.0)**2)
-        noise_annulus = np.where((r_img > 9) & (r_img <= 16))
-        psf_mask = np.where(r_img < 4.0)
+        noise_annulus = np.where((r_img > 10) & (r_img <= 19))
+        psf_mask = np.where(r_img < 5.0)
         
         background_sum = np.nansum(frame[noise_annulus])
         n_ann = frame[noise_annulus].shape[0]
         n_psf = frame[psf_mask].shape[0]
         
         background_std = np.std(frame[noise_annulus])
-        std.append(np.sum(frame[psf_mask])/np.sqrt((background_sum* n_psf/n_ann) + np.sum(frame[psf_mask])) )
+        std.append(np.sum(frame[psf_mask])/np.sqrt((background_sum* n_psf/n_ann) + np.sum(frame[psf_mask])))
         bkgs.append(np.std(frame[noise_annulus]))
         flux.append(np.sum(frame[psf_mask])) 
-    std = np.array(std)/np.sqrt(nFrames)
+    std = np.array(std)#/np.sqrt(nFrames)
     flux = np.array(flux)
     bkgs = np.array(bkgs)
     return std/flux

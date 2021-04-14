@@ -64,6 +64,8 @@ def init_gpi(data_dir):
     # GPI
     # Original files 131117,131118,160919
     # PynPoint structure GPIH, GPIK1, GPIK2
+    global instrument
+    instrument = "GPI"
     psf_name = glob.glob(data_dir + "*_PSF_cube.fits")[0]
 
     psf = fits.open(psf_name)[0].data
@@ -134,6 +136,8 @@ def get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, pl
     numbasis=np.array([10,15])
     if "Ifs" in dataset.__class__.__name__:
         instrument = "SPHERE"
+    else:
+        instrument = "GPI"
     # initialize the FM Planet PSF class
     if "sphere" in instrument.lower():
         dataind = 0 # For some reason the outputs for the fm are different

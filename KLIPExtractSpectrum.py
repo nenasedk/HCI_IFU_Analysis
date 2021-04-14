@@ -108,7 +108,7 @@ def main(args):
     # initialize pyklip dataset
     if "gpi" in instrument.lower():
         dataset = init_gpi()
-        pxscale = 0.0162
+        pxscale =  0.014161
     elif "sphere" in instrument.lower():
         dataset = init_sphere()
         pxscale = 0.007462
@@ -170,12 +170,14 @@ def init_gpi():
         os.makedirs(data_dir + "pyklip", exist_ok=True) 
 
     filelist = sorted(glob.glob(data_dir +"*distorcorr.fits"))
-    if "K1" in instrument:
+    """if "K1" in instrument:
+        print("skipping 0,1,36")
         dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True, skipslices=[0,1,36])
-    if "K2" in instrument:
+    elif "K2" in instrument:
+        print("skipping 0,1,2")
         dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True, skipslices=[0,1,2])
-    else:
-        dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True)
+    else:"""
+    dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=False)
     return dataset
 
 def init_psfs(dataset):
@@ -302,10 +304,10 @@ def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
     fig,ax = plt.subplots(figsize = (16,10))
     print(distance, spot_to_star_ratio, stellar_model.shape,'\n')
     sm = stellar_model[1]
-    if "K1" in instrument:
-        sm = sm.delete([0,1,36])
+    """if "K1" in instrument:
+        sm = np.delete(sm,np.array([0,1,36]))
     elif "K2" in instrument:
-        sm = sm.delete([0,1,2])
+        sm = np.delete(sm,np.array([0,1,2]))"""
     for i in range(num_k_klip):
         ax.plot(wlen,exspect[i,:]*spot_to_star_ratio*sm*(distance/10.)**2,label=str(numbasis[i]),alpha=0.5)
     ax.plot(wlen,m_cont*spot_to_star_ratio*sm*(distance/10.)**2 ,label = 'Mean',linewidth=4)
@@ -360,6 +362,83 @@ def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
                     outputdir=data_dir + "pyklip/",
                     mute_progression=True)
     return 
+
+def recover_fake(dataset, files, position, fake_flux, kklip):
+    # We will need to create a new dataset each time.
+    nbasis = [kklip]
+    # PSF model template for each cube observation, copies of the PSF model:
+    inputpsfs = np.tile(dataset.psfs, (N_cubes, 1, 1))
+    bulk_contrast = 1e-2
+    fake_psf = inputpsfs*fake_flux[:,None,None]*dataset.dn_per_contrast[:,None,None]
+    pa = position[1]
+    tmp_dataset = GPI.GPIData(files, highpass=False, PSF_cube = psf,recalc_centers=True,meas_satspot_flux=True)
+    tmp_dataset.generate_psf_cube(21)
+    print(position)
+    fakes.inject_planet(tmp_dataset.input, tmp_dataset.centers, fake_psf,\
+                                    tmp_dataset.wcs, planet_sep, pa)
+
+    fm_class = es.ExtractSpec(tmp_dataset.input.shape,
+                               nbasis,
+                               planet_sep,
+                               pa,
+                               PSF_cube,
+                               np.unique(tmp_dataset.wvs),
+                               stamp_size = stamp_size,
+                               datatype = 'double')
+
+    fm.klip_dataset(tmp_dataset, fm_class,
+                        fileprefix="fakespect",
+                        annuli=[[planet_sep-2.0*stamp_size,planet_sep+2.0*stamp_size]],
+                        subsections=[[(pa-2.0*stamp_size)/180.*np.pi,\
+                                      (pa+2.0*stamp_size)/180.*np.pi]],
+                        movement=movement,
+                        #flux_overlap = 0.1,
+                        numbasis = numbasis[k],
+                        maxnumbasis=maxnumbasis,
+                        numthreads=numthreads,
+                        spectrum=None,#spectra_template,
+                        #time_collapse = 'weighted-mean',
+                        save_klipped=True,
+                        highpass=True,
+                        calibrate_flux=True,
+                        outputdir=data_dir + "pyklip/")
+    fake_spect, fakefm = es.invert_spect_fmodel(tmp_dataset.fmout,
+                                           tmp_dataset, method="leastsq",
+                                           units="natural", scaling_factor=1.0)
+    del tmp_dataset
+    return fake_spect
+
+def mcmc_scaling(dataset,posn,exspect,spot_to_star_ratio,stellar_model):
+    print("Running MCMC to compute over-subtraction scaling factor.")
+
+    files = glob.glob(data_dir + "*corr.fits")
+    N_frames = len(dataset.input)
+    N_cubes = np.size(np.unique(dataset.filenums))
+    nl = N_frames // N_cubes
+
+    #print(files)
+    # This could take a long time to run
+    # Define a set of PAs to put in fake sources
+    npas = 11
+    planet_sep, planet_pa = posn
+    planet_sep =planet_sep/1000 / pxscale #mas to pixels
+    pas = (np.linspace(planet_pa, planet_pa+360, num=npas+2)%360)[1:-1]
+
+    # For numbasis "k"
+    # repeat the spectrum over each cube in the dataset
+    scaling = []
+    for k in [2,4]:
+        input_spect = np.tile(exspect[k,:]*spot_to_star_ratio, N_cubes)
+        fake_spectra = np.zeros((npas, nl))
+        for p, para in enumerate(pas):
+            fake_spectra[p,:] = recover_fake(dataset, files, (planet_sep, para), input_spect, numbasis[k])
+            scaling.append((exspect[k,:]*spot_to_star_ratio)/(fake_spectra[p,:]/dataset.dn_per_contrast[:nl]))
+    np.save(data_dir + "pyklip/mcmc_outputs",fake_spectra)
+
+    scaling = np.array(scaling)
+    sm = stellar_model[1]
+    np.save(data_dir + "pyklip/mcmc_scale_factor",scaling)
+    np.save(data_dir + "pyklip/scaled_spectrum",np.mean(scaling,axis=0)*exspect*spot_to_star_ratio*sm*(distance/10.)**2)
 
 def combine_residuals():
     print("Combining residuals into fits file.")
