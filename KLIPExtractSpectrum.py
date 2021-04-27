@@ -122,11 +122,21 @@ def main(args):
     else: 
         posn_dict = read_astrometry(data_dir,planet_name)
         posn = (posn_dict["Separation [mas]"][0], posn_dict["PA [deg]"][0])
+
     if not args.cont:
+        # Run klip
         exspect, fm_matrix = KLIP_Extraction(dataset, PSF_cube, posn, numthreads)
+        # Get flux in flux and contrast units
         contrasts,flux = get_spectrum(dataset, exspect,spot_to_star_ratio, stellar_model)
+        # Get full frame residuals. Not strictly correct, but should be ok
         KLIP_fulframe(dataset, PSF_cube, posn, numthreads)
+    else:
+        exspect = np.load(data_dir + "/pyklip/exspect.npy")
+    # Generate nice outputs
     combine_residuals()
+
+    # Find scaling factors for oversubtraction
+    mcmc_scaling(dataset,PSF_cube,posn,exspect,spot_to_star_ratio,stellar_model)
     del dataset
     return 
 
@@ -155,7 +165,7 @@ def init_sphere():
                          fitsinfo,
                          wvinfo, 
                          nan_mask_boxsize=9,
-                         psf_cube_size = 13)
+                         psf_cube_size = 15)
     print("read in data")
     return dataset
 
@@ -228,6 +238,9 @@ def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
     ###### The forward model class ######
     # WATCH OUT FOR MEMORY ISSUES HERE
     # If the PSF size, input size or numbasis size is too large, will cause issues on cluster
+    dtype = "double"
+    if "sphere" in instrument.lower():
+        dtype = "float"
     fm_class = es.ExtractSpec(dataset.input.shape,
                         numbasis,
                         planet_sep,
@@ -235,7 +248,7 @@ def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
                         PSF_cube,
                         np.unique(dataset.wvs),
                         stamp_size = stamp_size,
-                        datatype = 'double') #must be double
+                        datatype = dtype) #must be double?
 
     ###### Now run KLIP! ######
     fm.klip_dataset(dataset, fm_class,
@@ -363,22 +376,29 @@ def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
                     mute_progression=True)
     return 
 
-def recover_fake(dataset, files, position, fake_flux, kklip):
+def recover_fake(dataset, PSF_cube, files, position, fake_flux, kklip):
     # We will need to create a new dataset each time.
-    nbasis = [kklip]
+    N_frames = len(dataset.input)
+    N_cubes = np.size(np.unique(dataset.filenums))
+    nl = N_frames // N_cubes
+
     # PSF model template for each cube observation, copies of the PSF model:
     inputpsfs = np.tile(dataset.psfs, (N_cubes, 1, 1))
     bulk_contrast = 1e-2
     fake_psf = inputpsfs*fake_flux[:,None,None]*dataset.dn_per_contrast[:,None,None]
-    pa = position[1]
-    tmp_dataset = GPI.GPIData(files, highpass=False, PSF_cube = psf,recalc_centers=True,meas_satspot_flux=True)
-    tmp_dataset.generate_psf_cube(21)
+    planet_sep, pa = position
+    planet_sep =planet_sep/1000 / pxscale #mas to pixels
+    if "sphere" in instrument.lower():
+        tmp_dataset = init_sphere()
+    if "gpi" in instrument.lower():
+        tmp_dataset = init_gpi()
+        tmp_dataset.generate_psf_cube(21)
     print(position)
     fakes.inject_planet(tmp_dataset.input, tmp_dataset.centers, fake_psf,\
                                     tmp_dataset.wcs, planet_sep, pa)
 
     fm_class = es.ExtractSpec(tmp_dataset.input.shape,
-                               nbasis,
+                               numbasis[kklip],
                                planet_sep,
                                pa,
                                PSF_cube,
@@ -393,7 +413,7 @@ def recover_fake(dataset, files, position, fake_flux, kklip):
                                       (pa+2.0*stamp_size)/180.*np.pi]],
                         movement=movement,
                         #flux_overlap = 0.1,
-                        numbasis = numbasis[k],
+                        numbasis = numbasis[kklip],
                         maxnumbasis=maxnumbasis,
                         numthreads=numthreads,
                         spectrum=None,#spectra_template,
@@ -408,7 +428,7 @@ def recover_fake(dataset, files, position, fake_flux, kklip):
     del tmp_dataset
     return fake_spect
 
-def mcmc_scaling(dataset,posn,exspect,spot_to_star_ratio,stellar_model):
+def mcmc_scaling(dataset,PSF_cube,posn,exspect,spot_to_star_ratio,stellar_model):
     print("Running MCMC to compute over-subtraction scaling factor.")
 
     files = glob.glob(data_dir + "*corr.fits")
@@ -431,7 +451,7 @@ def mcmc_scaling(dataset,posn,exspect,spot_to_star_ratio,stellar_model):
         input_spect = np.tile(exspect[k,:]*spot_to_star_ratio, N_cubes)
         fake_spectra = np.zeros((npas, nl))
         for p, para in enumerate(pas):
-            fake_spectra[p,:] = recover_fake(dataset, files, (planet_sep, para), input_spect, numbasis[k])
+            fake_spectra[p,:] = recover_fake(dataset, PSF_cube, files, (planet_sep, para), input_spect, k)
             scaling.append((exspect[k,:]*spot_to_star_ratio)/(fake_spectra[p,:]/dataset.dn_per_contrast[:nl]))
     np.save(data_dir + "pyklip/mcmc_outputs",fake_spectra)
 
@@ -442,7 +462,7 @@ def mcmc_scaling(dataset,posn,exspect,spot_to_star_ratio,stellar_model):
 
 def combine_residuals():
     print("Combining residuals into fits file.")
-    files = sorted(glob.glob(data_dir + "pyklip/*fullframe*"))
+    files = sorted(glob.glob(data_dir + "pyklip/fullframe*"))
     hduls = []
     hdu0 = fits.PrimaryHDU()
     hdul = fits.open(files[0])
@@ -450,13 +470,17 @@ def combine_residuals():
     hdul.close()
 
     hduls.append(hdu0)
+    if "sphere" in instrument.lower():
+        dataind = 0 # For some reason the outputs for the fm are different
+    elif "gpi" in instrument.lower():
+        dataind = 1
     for i,f in enumerate(files):
         if "KLmodes" in f:
             continue
         hdul = fits.open(f)
-        data = hdul[1].data
+        data = hdul[dataind].data
         hdu = fits.ImageHDU(data,name = str(numbasis[i])+"PC")
-        hdu.header = hdul[1].header
+        hdu.header = hdul[dataind].header
         hduls.append(hdu)
         hdul.close()
 

@@ -46,14 +46,15 @@ def main(args):
     parser.add_argument("name", type=str, default= "HR8799")   
     args = parser.parse_args(args)
 
-    if "gpi" in instrument.lower():
-        pxscale = 0.014161
-    elif "sphere" in instrument.lower():
-        pxscale = 0.007462
+
 
     data_dir = args.path
     instrument = args.instrument
     planet_name = args.name
+    if "gpi" in instrument.lower():
+        pxscale = 0.014161
+    elif "sphere" in instrument.lower():
+        pxscale = 0.007462
     # Setup directories
     if not data_dir.endswith("/"):
         data_dir += "/"
@@ -71,17 +72,27 @@ def main(args):
         residuals = np.load(data_dir + instrument + "_" + planet_name + "_residuals.npy")
     elif os.path.exists(data_dir + instrument + "_" + planet_name + "_residuals.fits"):
         hdul = fits.open(data_dir + instrument + "_" + planet_name + "_residuals.fits")
-        residuals = [hdu.data for hdu in hdul[1:]]
-        if "gpi" in instrument.lower():
-            try: 
-                CENTER = (hdul[1].header['PSFCENTX'],hdul[1].header['PSFCENTX'])
-            except:
-                CENTER = (hdul[0].header['PSFCENTX'],hdul[0].header['PSFCENTX'])
+        if "pynpoint" in data_dir:
+            dataind = 0
         else:
-            CENTER = (residual.shape[-2]/2.0,residual.shape[-1]/2.0)
+            dataind = 1
+        residuals = np.array([hdu.data for hdu in hdul[dataind:]])
+        if "pynpoint" in data_dir:
+            residuals = residuals[0]
+        print(residuals.shape)
     else:
         print("No residual file found!")
         return
+
+    try: 
+        CENTER = (hdul[1].header['PSFCENTX'],hdul[1].header['PSFCENTX'])
+    except:
+        try: 
+            CENTER = (hdul[1].header['PSFCENTX'],hdul[1].header['PSFCENTX'])
+        except:
+            CENTER = (residuals.shape[-2]/2.0,residuals.shape[-1]/2.0) 
+        
+
     residuals = np.array(residuals)
     print(spectrum.shape,residuals.shape)
 
@@ -260,7 +271,8 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
         nFrames = psf_cube.shape[1]
         psf_cube = np.nanmean(psf_cube,axis=1)
     elif instrument.lower() == "sphereyjh":
-        psf_cube = fits.open(glob.glob(data_dir + psf_name)[0])
+        psf_name = "../psf_cube.fits"
+        psf_cube = fits.open(glob.glob(data_dir + psf_name)[0])[0].data
         nFrames = 1
     elif "gpi" in instrument.lower():
         psf_name = glob.glob(data_dir + "../*_PSF_cube.fits")[0]
@@ -332,7 +344,8 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
         uncor_err = np.array(uncor_err)
         total_err = np.array(total_err)
         real_err = total_err*spectrum
-    del dataset
+    if "gpi"in instrument.lower():
+        del dataset
     return real_err, total_err, uncor_err, fluxes
 
 def photometric_error(psf_cube):
@@ -345,7 +358,7 @@ def photometric_error(psf_cube):
     bkgs = []
     flux = []
     errdict = {"GPIH": 60,"GPIK1":24,"GPIK2":20,"SPHEREYJH":72}
-
+    print(psf_cube.shape)
     for frame in psf_cube[:]:
         y_img, x_img = np.indices(frame.shape, dtype=float)
         r_img = np.sqrt((x_img - frame.shape[0]/2.0)**2 + (y_img - frame.shape[1]/2.0)**2)

@@ -126,14 +126,15 @@ def main(args):
     data_shape = preproc_files()
 
     # Check for KLIP astrometry and either read in or create
-    if not os.path.exists(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):
-        if "gpi" in instrument.lower():
-            dataset = init_gpi(data_dir)
-        elif "sphere" in instrument.lower():
-            dataset = init_sphere(data_dir)
-        PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
-        # posn is in sep [mas] and PA [degree], we need offsets in x and y px
-        posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
+    if not cont:
+        if not os.path.exists(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):
+            if "gpi" in instrument.lower():
+                dataset = init_gpi(data_dir)
+            elif "sphere" in instrument.lower():
+                dataset = init_sphere(data_dir)
+            PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
+            # posn is in sep [mas] and PA [degree], we need offsets in x and y px
+            posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
 
     # read_astrometry gives offsets in x,y, need to compute absolute posns
     posn_dict = read_astrometry(data_dir,planet_name)
@@ -142,12 +143,12 @@ def main(args):
 
     # Sanity chec the posn
     print(CENTER,posn,posn_pyn)
-    if not cont:
-        # Run ADI for each channel individually
-        run_all_channels(nChannels,
-                        base_name,
-                        instrument + "_" + planet_name,
-                        posn_pyn)
+    #if not cont:
+    # Run ADI for each channel individually
+    run_all_channels(nChannels,
+                    base_name,
+                    instrument + "_" + planet_name,
+                    posn_pyn)
 
     # Save outputs to numpy arrays
     contrasts = save_contrasts(nChannels,
@@ -180,6 +181,7 @@ def test_analysis(input_name,psf_name,output_name,posn,working_dir,waffle = Fals
                                filenames = sorted(glob.glob(data_dir + input_name)))
     test_pipeline.add_module(module)
 
+    #todo - generic naming for wavelength
     module = WavelengthReadingModule(name_in="read_wlen",
                                input_dir=data_dir,
                                data_tag="science",
@@ -285,7 +287,7 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
                                        aperture = 0.04, # in arcsec
                                        tolerance = 0.0005, # tighter tolerance is good
                                        pca_number = pcas, #listed above
-                                       cent_size = 0.15, # how much to block out 
+                                       cent_size = 0.2, # how much to block out 
                                        offset = 1.0) #use fixed astrometry from KLIP
 
     pipeline.add_module(module)
@@ -297,16 +299,16 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
         save_residuals(residuals[-1],output_name +"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca), data_dir+ "pynpoint/" )
 
 # Run Pynpoint
-def run_all_channels(nChannels, base_name, output_name, posn, skip = False):
+def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
     global pcas
     if not isinstance(pcas, list): 
         pcas = pcas.tolist()
-    if "sphere" in instrument.lower():
+    """if "sphere" in instrument.lower():
         # use 'frames removed' files
         test_analysis("frames_removed.fits","*_PSF.fits",output_name,posn,data_dir)
     elif "gpi" in instrument.lower():
         # reshape data into a single file to read in for correct shape
-        test_analysis("*pyklip_frames_removed.fits","*_PSF.fits",output_name,posn,data_dir)
+        test_analysis("*pyklip_frames_removed.fits","*_PSF.fits",output_name,posn,data_dir)"""
 
     # Loop over all channels
     for channel in range(nChannels):
@@ -471,7 +473,7 @@ def preproc_files(skip = False):
         cube = hdul[0].data
         CENTER = (cube.shape[-2]/2.0,cube.shape[-1]/2.0)
         NORMFACTOR = DIT_SCIENCE/DIT_FLUX
-        N_cubes =np.size(np.unique(dataset.filenums))
+        N_cubes = cube.shape[1]
         pcas[pcas>=N_cubes] = N_cubes -1
         pcas = np.unique(pcas).tolist()
         # Data shape is used to calculate image center, so it's returned
