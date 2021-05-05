@@ -299,7 +299,7 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
         save_residuals(residuals[-1],output_name +"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca), data_dir+ "pynpoint/" )
 
 # Run Pynpoint
-def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
+def run_all_channels(nChannels, base_name, output_name, posn, skip = False):
     global pcas
     if not isinstance(pcas, list): 
         pcas = pcas.tolist()
@@ -345,7 +345,9 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
     residuals = [] #pynpoint mag units
     contrasts = [] #in actual contrast units, only needs stellar spectrum normalization
     print("Saving residual outputs")
-    combine_residuals(output_name,nChannels)
+
+    # TODO: why repeated outputs - choose correct format!
+    #combine_residuals(output_name,nChannels)
     for pca in pcas:
         rpcas = []
         contrast = []
@@ -422,7 +424,7 @@ def save_contrasts(nChannels,base_name,output_place,output_name):
         for channel in range(nChannels):
             samples = np.genfromtxt(data_dir + "pynpoint/"+ output_name + "_ch" + str(channel).zfill(3) +"_flux_pos_out_pca_" +str(pca)+ ".dat")
             samples = 10**(samples/-2.5)
-            contrast.append(samples[-1][4])
+            contrast.append(samples[-1][4]*NORMFACTOR)
         contrasts.append(contrast)
     cont = np.array(contrasts)
     np.save(output_place + output_name +  "_contrasts",cont) # saved in magnitude units
