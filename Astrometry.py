@@ -157,7 +157,8 @@ def get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, pl
     outputdir = data_dir + "pyklip/" # where to write the output files
     prefix = instrument + "_" + planet_name + "_fmpsf" # fileprefix for the output files
     annulus_bounds = [[guesssep-11, guesssep+11]] # one annulus centered on the planet, one for covariance
-    subsections = 2 # we are not breaking up the annulus
+    stamp_size = 11
+    subsections = [[(guesspa-1.5*stamp_size)/180.*np.pi,(guesspa+1.5*stamp_size)/180.*np.pi]] # we are not breaking up the annulus
     padding = 0 # we are not padding our zones
     movement = 4 # we are using an conservative exclusion criteria of 4 pixels
     numbasis = [5,10]
@@ -206,8 +207,8 @@ def get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, pl
     fit.set_kernel("matern32", [corr_len_guess], [corr_len_label])
     # set bounds
 
-    x_range = 3 # pixels
-    y_range = 3 # pixels
+    x_range = 6 # pixels
+    y_range = 6 # pixels
     flux_range = 1. # flux can vary by an order of magnitude
     corr_len_range = 3. # between 0.3 and 30
     fit.set_bounds(x_range, y_range, flux_range, [corr_len_range])

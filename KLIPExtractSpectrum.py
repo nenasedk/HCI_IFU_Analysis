@@ -31,7 +31,7 @@ from Astrometry import get_astrometry, read_astrometry
 #
 # Matplotlib styling
 #rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
-#rc('text', usetex=True)  
+#rc('text', usetex=True)
 
 ### KLIP Parameters ###
 numbasis = np.array([3,4,5,8,10,12,15]) # "k_klip", this can be a list of any size.
@@ -66,17 +66,17 @@ def main(args):
 
     sys.path.append(os.getcwd())
 
-    global data_dir 
+    global data_dir
     global instrument
-    global planet_name   
+    global planet_name
     global DIT_SCIENCE
-    global DIT_FLUX 
+    global DIT_FLUX
     global pxscale
     # Let's read in what we need
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=str, default= "/u/nnas/data/")
     parser.add_argument("instrument", type=str, default= "GPI")
-    parser.add_argument("name", type=str, default= "HR8799")   
+    parser.add_argument("name", type=str, default= "HR8799")
     parser.add_argument("posn", type=float, nargs = "+") # rough guess at sep [mas] and PA [deg]
     # OBJECT/SCIENCE and OBJECT/FLUX integration times for normalisation
     parser.add_argument("-ds","--ditscience", type=float, required=False)
@@ -119,10 +119,10 @@ def main(args):
     # Get the planet astrometry
     if not os.path.exists(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):
         posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, planet_name)
-    else: 
-        posn_dict = read_astrometry(data_dir,planet_name)
-        posn = (posn_dict["Separation [mas]"][0], posn_dict["PA [deg]"][0])
 
+    posn_dict = read_astrometry(data_dir,planet_name)
+    posn = (posn_dict["Separation [mas]"][0], posn_dict["PA [deg]"][0])
+    print(posn)
     if not args.cont:
         # Run klip
         exspect, fm_matrix = KLIP_Extraction(dataset, PSF_cube, posn, numthreads)
@@ -138,7 +138,7 @@ def main(args):
     # Find scaling factors for oversubtraction
     mcmc_scaling(dataset,PSF_cube,posn,exspect,spot_to_star_ratio,stellar_model)
     del dataset
-    return 
+    return
 
 def init_sphere():
     datacube = data_dir + "frames_removed.fits"
@@ -160,10 +160,10 @@ def init_sphere():
         hdul_wlen = fits.HDUList([hdu_wlen])
         hdul_wlen.writeto(data_dir + "wavelength.fits",overwrite=True)
     hdul_w.close()
-    dataset = SPHERE.Ifs(datacube, 
+    dataset = SPHERE.Ifs(datacube,
                          psfcube,
                          fitsinfo,
-                         wvinfo, 
+                         wvinfo,
                          nan_mask_boxsize=9,
                          psf_cube_size = 15)
     print("read in data")
@@ -177,7 +177,7 @@ def init_gpi():
 
     psf = fits.open(psf_name)[0].data
     if not os.path.isdir(data_dir + "pyklip"):
-        os.makedirs(data_dir + "pyklip", exist_ok=True) 
+        os.makedirs(data_dir + "pyklip", exist_ok=True)
 
     filelist = sorted(glob.glob(data_dir +"*distorcorr.fits"))
     """if "K1" in instrument:
@@ -201,7 +201,7 @@ def init_psfs(dataset):
     # relative to the input PSF model, see next example
     # generate_psf_cube has better background subtraction than generate_psfs
     if "sphere" in instrument.lower():
-        return dataset.psfs,dataset.psfs,DIT_SCIENCE/DIT_FLUX
+        return dataset.psfs,dataset.psfs,DIT_FLUX/DIT_SCIENCE
     if "K" in instrument:
         dataset.generate_psfs(11)
     else:
@@ -374,7 +374,7 @@ def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
                     calibrate_flux=True,
                     outputdir=data_dir + "pyklip/",
                     mute_progression=True)
-    return 
+    return
 
 def recover_fake(dataset, PSF_cube, files, position, fake_flux, kklip):
     # We will need to create a new dataset each time.
@@ -384,16 +384,18 @@ def recover_fake(dataset, PSF_cube, files, position, fake_flux, kklip):
 
     # PSF model template for each cube observation, copies of the PSF model:
     inputpsfs = np.tile(dataset.psfs, (N_cubes, 1, 1))
-    bulk_contrast = 1e-2
+    #bulk_contrast = 1e-2
     fake_psf = inputpsfs*fake_flux[:,None,None]*dataset.dn_per_contrast[:,None,None]
+
     planet_sep, pa = position
-    planet_sep =planet_sep/1000 / pxscale #mas to pixels
+    planet_sep = planet_sep/1000 / pxscale #mas to pixels
     if "sphere" in instrument.lower():
         tmp_dataset = init_sphere()
     if "gpi" in instrument.lower():
         tmp_dataset = init_gpi()
         tmp_dataset.generate_psf_cube(21)
-    print(position)
+    print(fake_psf.shape,PSF_cube.shape)
+    print(np.mean(fake_psf),np.mean(PSF_cube))
     fakes.inject_planet(tmp_dataset.input, tmp_dataset.centers, fake_psf,\
                                     tmp_dataset.wcs, planet_sep, pa)
 
@@ -404,20 +406,18 @@ def recover_fake(dataset, PSF_cube, files, position, fake_flux, kklip):
                                PSF_cube,
                                np.unique(tmp_dataset.wvs),
                                stamp_size = stamp_size,
-                               datatype = 'double')
+                               datatype = 'float')
 
     fm.klip_dataset(tmp_dataset, fm_class,
                         fileprefix="fakespect",
-                        annuli=[[planet_sep-2.0*stamp_size,planet_sep+2.0*stamp_size]],
+                        annuli=[[planet_sep-1.5*stamp_size,planet_sep+1.5*stamp_size]],
                         subsections=[[(pa-2.0*stamp_size)/180.*np.pi,\
                                       (pa+2.0*stamp_size)/180.*np.pi]],
                         movement=movement,
-                        #flux_overlap = 0.1,
                         numbasis = numbasis[kklip],
                         maxnumbasis=maxnumbasis,
                         numthreads=numthreads,
-                        spectrum=None,#spectra_template,
-                        #time_collapse = 'weighted-mean',
+                        spectrum=None,
                         save_klipped=True,
                         highpass=True,
                         calibrate_flux=True,

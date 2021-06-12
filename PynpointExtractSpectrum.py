@@ -38,7 +38,7 @@ from pynpoint import Pypeline, \
 
 # Matplotlib styling
 #rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
-#rc('text', usetex=True)  
+#rc('text', usetex=True)
 
 # Data dir must contain ALL files
 # This means: science cubes (wlen,nframes,x,y)
@@ -70,7 +70,7 @@ def main(args):
     # necessary for running in cluster
     sys.path.append(os.getcwd())
 
-    global data_dir 
+    global data_dir
     global instrument
     global planet_name
     global DIT_SCIENCE
@@ -81,8 +81,8 @@ def main(args):
     parser.add_argument("path", type=str, default= "/u/nnas/data/")
     # What instrument are we using - expects: SPHEREYJH, SPHEREYJ, GPIH, GPIK1, GPIK2
     parser.add_argument("instrument", type=str, default= "GPI")
-    # Name of the planet we're looking at 
-    parser.add_argument("name", type=str, default= "HR8799")   
+    # Name of the planet we're looking at
+    parser.add_argument("name", type=str, default= "HR8799")
     # Separation in mas and posn in PA (two floats for input)
     parser.add_argument("posn", type=float, nargs = "+")
     # OBJECT/SCIENCE and OBJECT/FLUX integration times for normalisation
@@ -110,7 +110,7 @@ def main(args):
     if not data_dir.endswith("/"):
         data_dir += "/"
     if not os.path.isdir(data_dir + "pynpoint/"):
-        os.makedirs(data_dir + "pynpoint", exist_ok=True) 
+        os.makedirs(data_dir + "pynpoint", exist_ok=True)
 
     # Instrument parameters
     if "sphere" in instrument.lower():
@@ -135,14 +135,33 @@ def main(args):
             PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
             # posn is in sep [mas] and PA [degree], we need offsets in x and y px
             posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
+    try:
+        pname = glob.glob(data_dir + "parang_removed*")[0]
+    except:
+        pname = glob.glob(data_dir + "parangs.fits")[0]
+    #if pname is None:
+
+    PAs = fits.open(pname)[0].data
+    print(np.min(PAs),np.max(PAs))
+    posn_dict = read_astrometry(data_dir,planet_name)
+
+    # This is so hacky
+    # 102.18 - from pyklip SPHERE north_offset
+    # PAs - shift to first PA
+    # 1.75 - IFS offset
+    shift = 1.75
+    x_pix = ((posn_dict["Separation [mas]"][0]/1000)/pixscale)*np.sin((shift-posn_dict["PA [deg]"][0]) * np.pi / 180.)
+    y_pix = ((posn_dict["Separation [mas]"][0]/1000)/pixscale)*np.cos((shift-posn_dict["PA [deg]"][0]) * np.pi / 180.)
 
     # read_astrometry gives offsets in x,y, need to compute absolute posns
-    posn_dict = read_astrometry(data_dir,planet_name)
     posn = (-1*posn_dict["Px RA offset [px]"][0], -1*posn_dict["Px Dec offset [px]"][0])
-    posn_pyn = (posn[0] + CENTER[0], posn[1] + CENTER[1])
-
+    posn_old = (posn[0] + CENTER[0], posn[1] + CENTER[1])
+    # But this actually works? At least for SPHERE data - need to see what's up with GPI TODO
+    posn_pyn = (CENTER[0]+x_pix,CENTER[1]+y_pix)
+    #if "gpi"in instrument.lower():
+    #posn_pyn = posn_old # Keeping this the old way for now just in case
     # Sanity chec the posn
-    print(CENTER,posn,posn_pyn)
+    print(CENTER,posn,posn_old,posn_pyn,x_pix,y_pix)
     #if not cont:
     # Run ADI for each channel individually
     run_all_channels(nChannels,
@@ -161,14 +180,14 @@ def main(args):
 
 
 # Saves PCA residuals to fits file
-def save_residuals(residuals,name,output_place):   
+def save_residuals(residuals,name,output_place):
     hdu = fits.PrimaryHDU(residuals)
     hdul = fits.HDUList([hdu])
     hdul.writeto(output_place + name + '.fits',overwrite = True)
 
 # Do a full ADI + SDI analysis to check that inputs work correctly
 def test_analysis(input_name,psf_name,output_name,posn,working_dir,waffle = False):
-    # 
+    #
     #set_fwhm(0)
     test_pipeline = Pypeline(working_place_in=working_dir,
                         input_place_in=data_dir,
@@ -209,7 +228,7 @@ def test_analysis(input_name,psf_name,output_name,posn,working_dir,waffle = Fals
                                  data_tag = 'science',
                                  overwrite=True)
     test_pipeline.add_module(module)
-    
+
     module = PcaPsfSubtractionModule(name_in = "test_analysis",
                                      images_in_tag = "science",
                                      reference_in_tag = "science",
@@ -287,7 +306,7 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
                                        aperture = 0.04, # in arcsec
                                        tolerance = 0.0005, # tighter tolerance is good
                                        pca_number = pcas, #listed above
-                                       cent_size = 0.2, # how much to block out 
+                                       cent_size = 0.2, # how much to block out
                                        offset = 1.0) #use fixed astrometry from KLIP
 
     pipeline.add_module(module)
@@ -299,9 +318,9 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
         save_residuals(residuals[-1],output_name +"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca), data_dir+ "pynpoint/" )
 
 # Run Pynpoint
-def run_all_channels(nChannels, base_name, output_name, posn, skip = False):
+def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
     global pcas
-    if not isinstance(pcas, list): 
+    if not isinstance(pcas, list):
         pcas = pcas.tolist()
     """if "sphere" in instrument.lower():
         # use 'frames removed' files
@@ -319,18 +338,18 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = False):
             pcafiles = sorted(glob.glob(data_dir + "pynpoint/" +output_name +"_residuals_" + str(channel).zfill(3) + "_pca_*.fits"))
             if len(pcafiles) > 0:
                 continue
-        # Have to copy the config file to the working dir 
+        # Have to copy the config file to the working dir
         # Using separate dirs to get unique databases for each wavelength
         # Might be unnecessary, but then I don't have a 50GB hdf5 file to deal with
         if not os.path.isdir(working_dir):
-            os.makedirs(working_dir, exist_ok=True) 
+            os.makedirs(working_dir, exist_ok=True)
         if "sphere" in instrument.lower():
             shutil.copy("config/Pynpoint_config_SPHERE.ini", working_dir + "PynPoint_config.ini")
         elif "gpi" in instrument.lower():
             shutil.copy("config/Pynpoint_config_GPI.ini", working_dir + "PynPoint_config.ini")
-        
+
         # Naming everything consistently
-        # Channel must be zfilled for sorting 
+        # Channel must be zfilled for sorting
         # Better option would be using fits headers, but that's a pain.
         name = base_name +"_" + str(channel).zfill(3) + '_reduced.fits'
         psf_name = base_name +"_" + str(channel).zfill(3) + '_PSF.fits'
@@ -440,7 +459,7 @@ def save_flux(contrasts):
     fluxes = np.array(fluxes)
     np.save(data_dir + "pynpoint/" + instrument + "_" + planet_name + "_flux_10pc_7200K",fluxes) # Saved in W/m2/micron at 10pc
 
-# Reshape science and PSF files for PCA, 
+# Reshape science and PSF files for PCA,
 def preproc_files(skip = False):
     global NORMFACTOR
     global CENTER
@@ -458,15 +477,15 @@ def preproc_files(skip = False):
             psf_name= "psf_satellites_calibrated.fits"
         else:
             psf_name = "psf_cube.fits"
-        
+
         # sanity check on wlen units
         hdul_w = fits.open(data_dir + "wavelength.fits")
         if np.mean(hdul_w[0].data)>100.:
             hdu_wlen = fits.PrimaryHDU([hdul_w[0].data/1000])
             hdul_wlen = fits.HDUList([hdu_wlen])
             hdul_wlen.writeto(data_dir + "wavelength.fits",overwrite=True)
-        
-        
+
+
         # sanity check on wlen units
         if os.path.isfile(data_dir + "parang_removed.fits"):
             shutil.copy(data_dir + "parang_removed.fits",data_dir + "parangs.fits")
@@ -474,7 +493,7 @@ def preproc_files(skip = False):
         hdul = fits.open(data_dir + science_name)
         cube = hdul[0].data
         CENTER = (cube.shape[-2]/2.0,cube.shape[-1]/2.0)
-        NORMFACTOR = DIT_SCIENCE/DIT_FLUX
+        NORMFACTOR = DIT_FLUX/DIT_SCIENCE
         N_cubes = cube.shape[1]
         pcas[pcas>=N_cubes] = N_cubes -1
         pcas = np.unique(pcas).tolist()
@@ -508,7 +527,7 @@ def preproc_files(skip = False):
         filelist = sorted(glob.glob(data_dir +science_name))
         dataset = GPI.GPIData(filelist, highpass=True, PSF_cube = psfs,recalc_centers=True)
         dataset.generate_psf_cube(41)
-        
+
         pcas[pcas>=len(filelist)] = len(filelist)-1
         pcas = np.unique(pcas).tolist()
 
@@ -575,7 +594,7 @@ def preproc_files(skip = False):
                                 (pady,pady+1)),
                                 'constant')
                     padded = vip.preproc.recentering.frame_shift(padded,0.5,0.5)
-                else:   
+                else:
                     padded = np.pad(frame,
                                     ((padx,padx),
                                     (pady,pady)),
@@ -584,7 +603,7 @@ def preproc_files(skip = False):
                 padded = frame
             hdu = fits.PrimaryHDU(padded)
             hdu.header = psf_hdul[0].header
-            hdul_new = fits.HDUList([hdu])  
+            hdul_new = fits.HDUList([hdu])
             hdul_new.writeto(data_dir + "HR8799_"+instrument+"_" + str(channel).zfill(3) + '_PSF.fits',
                              overwrite=True,checksum=True,output_verify='exception')
         # Save wavelengths
@@ -593,7 +612,7 @@ def preproc_files(skip = False):
         hdul_new.writeto(data_dir + "wavelength.fits",overwrite = True)
 
         # pyklip does weird things with the PAs, so let's fix that.
-        # Keep or remove dataset.ifs_rotation? GPI IFS is rotated 23.5 deg, 
+        # Keep or remove dataset.ifs_rotation? GPI IFS is rotated 23.5 deg,
         pas = (dataset.PAs.reshape(len(filelist),37)[:,0] + 180.0)
         hdu = fits.PrimaryHDU(pas)
         hdul_new = fits.HDUList([hdu])
@@ -610,7 +629,7 @@ def keep_psf_frame(frame):
     xs = frame.shape[0]/2
     ys = frame.shape[1]/2
     offset = frame.shape[0]/4
-    
+
     pos_list = [[xs,ys],
                 [xs + offset, ys],
                 [xs, ys + offset],
@@ -638,7 +657,7 @@ def median_combine_psf_cube(cube,output_place,output_name):
         for frame in stack:
             if keep_psf_frame(frame):
                 keep.append(frame)
-        
+
         psf = np.nan_to_num(np.median(np.array(keep),axis = 0))
         psf = np.pad(psf,((60,60),(60,60)))
         print(psf.shape)
@@ -648,7 +667,7 @@ def median_combine_psf_cube(cube,output_place,output_name):
         hdul_new.writeto(output_place + output_name +"_" + str(channel).zfill(3) + '_PSF.fits',
                         overwrite = True)
     return psfs
-    
+
 def reshape_psf(filename):
     psfs = []
     hdul = fits.open(filename,mode='update')
