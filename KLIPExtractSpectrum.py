@@ -391,9 +391,10 @@ def recover_fake(dataset, PSF_cube, files, position, fake_flux, kklip):
     planet_sep = planet_sep/1000 / pxscale #mas to pixels
     if "sphere" in instrument.lower():
         tmp_dataset = init_sphere()
+
     if "gpi" in instrument.lower():
         tmp_dataset = init_gpi()
-        tmp_dataset.generate_psf_cube(21)
+    tmp_PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(tmp_dataset)
     print(fake_psf.shape,PSF_cube.shape)
     print(np.mean(fake_psf),np.mean(PSF_cube))
     fakes.inject_planet(tmp_dataset.input, tmp_dataset.centers, fake_psf,\
@@ -441,13 +442,13 @@ def mcmc_scaling(dataset,PSF_cube,posn,exspect,spot_to_star_ratio,stellar_model)
     # Define a set of PAs to put in fake sources
     npas = 11
     planet_sep, planet_pa = posn
-    planet_sep =planet_sep/1000 / pxscale #mas to pixels
+    planet_sep =planet_sep
     pas = (np.linspace(planet_pa, planet_pa+360, num=npas+2)%360)[1:-1]
 
     # For numbasis "k"
     # repeat the spectrum over each cube in the dataset
     scaling = []
-    for k in [2,4]:
+    for k in [2]:
         input_spect = np.tile(exspect[k,:]*spot_to_star_ratio, N_cubes)
         fake_spectra = np.zeros((npas, nl))
         for p, para in enumerate(pas):

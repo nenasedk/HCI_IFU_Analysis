@@ -81,7 +81,7 @@ def main(args):
         spectrum = np.load(data_dir +  "scaled_spectrum.npy")
     else:
         spectrum = np.load(data_dir + instrument + "_" + planet_name + "_flux_10pc_7200K.npy")
-
+        spectrum = spectrum #* (60/8)**2
     # Contrast unit spectrum.
     contrasts = np.load(data_dir + instrument + "_" + planet_name + "_contrasts.npy")
     # Residuals - the full frame residuals from processing, in contrast units
@@ -112,7 +112,7 @@ def main(args):
             CENTER = (residuals.shape[-2]/2.0,residuals.shape[-1]/2.0)
 
 
-    residuals = np.array(residuals)
+    residuals = np.array(residuals)#*(8/60)**2
     print(spectrum.shape,residuals.shape)
 
     # Checks to see if our residuals are for a full set of PCA components
@@ -170,30 +170,44 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
     r_in = posn_dict['Separation [mas]'][0]/1000/pxscale - 3
     r_out = posn_dict['Separation [mas]'][0]/1000/pxscale + 3
     annulus_c = CircularAnnulus(center,r_in = r_in, r_out = r_out)
+
+    if "sphere" in instrument.lower():
+        shift = 1.75
+        x_pix = ((posn_dict["Separation [mas]"][0]/1000)/pxscale)*np.sin((shift-posn_dict["PA [deg]"][0]) * np.pi / 180.)
+        y_pix = ((posn_dict["Separation [mas]"][0]/1000)/pxscale)*np.cos((shift-posn_dict["PA [deg]"][0]) * np.pi / 180.)
+        posn = (CENTER[0]+x_pix,CENTER[1]+y_pix)
+    else:
+        # read_astrometry gives offsets in x,y, need to compute absolute posns
+        posn = (CENTER[0]-(1*posn_dict["Px RA offset [px]"][0]), CENTER[0]-(1*posn_dict["Px Dec offset [px]"][0]))
+        # But this actually works? At least for SPHERE data - need to see what's up with GPI TODO
     if npca is not None:
         cors = []
         covs = []
         for j in range(npca):
             print("Found covariances for errors for ",j+1,"/",npca," PCs.")
             fluxes = []
+            zeropoint = np.nanmean(residuals[j])
             for i in range(nl):
                 # Stack and median subtract
                 med = residuals[j,i]
+                if "sphere" in instrument.lower():
+                    med = med - zeropoint
                 # Mask out planet (not sure if correct location)
+
                 mask = create_circular_mask(residuals.shape[-2],residuals.shape[-1],
-                                            center = (-1*posn_dict["Px RA offset [px]"][0] + CENTER[0],
-                                            posn_dict["Px Dec offset [px]"][0] + CENTER[1]),
+                                            center = posn,
                                             radius = 6.0)
 
                 # Get fluxes of all pixels within annulus
                 annulus = annulus_c.to_mask(method='center')
                 flux = annulus.multiply(mask*med)[annulus.data>0]
+                #print(flux)
                 fluxes.append(flux)
                 if i==25 and j==4:
                     fig,ax = plt.subplots(ncols = 2, figsize=(16,8))
                     ax = ax.flatten()
-                    ax[0].imshow(med)
-                    ax[1].imshow(med*mask)
+                    im0 = ax[0].imshow(med)
+                    im1 = ax[1].imshow(med*mask)
                     theta = np.linspace(0, 2*np.pi, 100)
                     a = r_out*np.cos(theta)+ CENTER[0]
                     b = r_out*np.sin(theta)+ CENTER[1]
@@ -201,6 +215,8 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
                     d = r_in*np.sin(theta)+ CENTER[1]
                     ax[1].plot(a,b,c='r')
                     ax[1].plot(c,d,c='r')
+                    plt.colorbar(im0,ax=ax[0])
+                    plt.colorbar(im1,ax=ax[1])
                     plt.savefig(data_dir + "annulus_check.pdf")
             fluxes = np.array(fluxes)
             # Compute correlation, Eqn 1 Samland et al 2017, https://arxiv.org/pdf/1704.02987.pdf
@@ -228,11 +244,10 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
         fluxes = []
         for i in range(nl):
             # Stack and median subtract
-            med = residuals[i]
+            med = residuals[i]- np.mean(residuals[i])
             # Mask out planet (not sure if correct location)
             mask = create_circular_mask(residuals.shape[-2],residuals.shape[-1],
-                                        center = (-1*posn_dict["Px RA offset [px]"][0] + CENTER[0],
-                                        posn_dict["Px Dec offset [px]"][0] + CENTER[1]),
+                                        center = posn,
                                         radius = 6.0)
             # Get fluxes of all pixels within annulus
             annulus = annulus_c.to_mask(method='center')
@@ -269,16 +284,16 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
     print("Calculating Uncorrelated Errors...")
 
     if "gpi" in instrument.lower():
-        loc = 1100.
+        loc = 1050.
     elif "sphere" in instrument.lower():
-        loc = 700.
+        loc = 750.
     center = CENTER
     width = 3
     r_in = loc/1000/pxscale - width
     r_out = loc/1000/pxscale + width
     annulus_c = CircularAnnulus(center,r_in = r_in, r_out = r_out)
     model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_" + instrument.upper() + "_fullfit_10pc.dat").T
-    model *= (41.2925/10.0)**2
+    #model *= (41.2925/10.0)**2
     if flux_cal:
         stellar_model = model[1]
     else:
@@ -286,8 +301,11 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
     # Get stellar PSF
     # Must be at least 30 px wide (for background error)
     if instrument.lower() == "sphereyj":
-        psf_name = "../psf_cube.fits"
-        psf_cube = fits.open(glob.glob(data_dir + psf_name)[0]).data * DIT_SCIENCE/DIT_FLUX
+        psf_name = "../psf_satellites_calibrated.fits"
+        try:
+            psf_cube = fits.open(glob.glob(data_dir + psf_name)[0]).data * DIT_SCIENCE/DIT_FLUX
+        except:
+            psf_cube = fits.open(glob.glob(data_dir + psf_name)[0])[0].data * DIT_SCIENCE/DIT_FLUX
         nFrames = psf_cube.shape[1]
         psf_cube = np.nanmean(psf_cube,axis=1)
     elif instrument.lower() == "sphereyjh":
@@ -310,6 +328,7 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
 
     # Fractional error on stellar psf
     phot_err = photometric_error(psf_cube)
+    #print(phot_err)
     fluxes = []
     uncor_err = []
     total_err = []
@@ -368,6 +387,7 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
         real_err = total_err*spectrum
     if "gpi"in instrument.lower():
         del dataset
+    #print(real_err, total_err, uncor_err)
     return real_err, total_err, uncor_err, fluxes
 
 def photometric_error(psf_cube):
@@ -402,9 +422,10 @@ def photometric_error(psf_cube):
 
 def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,cont_cov = None):
     wavelength = fits.open(data_dir + "../wavelength.fits")[0].data
+    if len(wavelength.shape) != 1:
+        wavelength = wavelength[0]
     if "gpi" in instrument.lower():
         instrum = "GPI"
-
     elif "sphere" in instrument.lower():
         instrum = "SPHERE"
 
@@ -415,7 +436,6 @@ def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,con
     primary_hdu = fits.PrimaryHDU([])
     primary_hdu.header = hdr
     primary_hdu.header['OBJECT'] = planet_name
-
     c1 = fits.Column(name = "WAVELENGTH", array = wavelength, format = 'D',unit = "micron")
     c2 = fits.Column(name = "FLUX", array = spectrum, format = 'D',unit = "W/m2/micron")
     c3 = fits.Column(name = "COVARIANCE", array = covariance, format = str(covariance.shape[0])+'D',unit = "[W/m2/micron]^2")

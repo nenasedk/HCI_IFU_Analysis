@@ -25,8 +25,9 @@ from Astrometry import get_astrometry, read_astrometry, init_sphere, init_gpi, i
 
 # Exoplanet stuff
 import pyklip.instruments.GPI as GPI
-import vip_hci as vip
-from vip_hci.preproc import cube_recenter_2dfit, cube_recenter_dft_upsampling
+#import vip_hci.var as var
+
+from vip_hci.preproc import recentering#, cube_recenter_2dfit, cube_recenter_dft_upsampling
 from pynpoint import Pypeline, \
                      FitsReadingModule,\
                      ParangReadingModule,\
@@ -127,11 +128,11 @@ def main(args):
 
     # Check for KLIP astrometry and either read in or create
     if not cont:
+        if "gpi" in instrument.lower():
+            dataset = init_gpi(data_dir)
+        elif "sphere" in instrument.lower():
+            dataset = init_sphere(data_dir)
         if not os.path.exists(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):
-            if "gpi" in instrument.lower():
-                dataset = init_gpi(data_dir)
-            elif "sphere" in instrument.lower():
-                dataset = init_sphere(data_dir)
             PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
             # posn is in sep [mas] and PA [degree], we need offsets in x and y px
             posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
@@ -149,7 +150,7 @@ def main(args):
     # 102.18 - from pyklip SPHERE north_offset
     # PAs - shift to first PA
     # 1.75 - IFS offset
-    shift = 1.75
+    shift = 0.0 # NO SHIFT FOR YJ DATA TO BE
     x_pix = ((posn_dict["Separation [mas]"][0]/1000)/pixscale)*np.sin((shift-posn_dict["PA [deg]"][0]) * np.pi / 180.)
     y_pix = ((posn_dict["Separation [mas]"][0]/1000)/pixscale)*np.cos((shift-posn_dict["PA [deg]"][0]) * np.pi / 180.)
 
@@ -158,10 +159,12 @@ def main(args):
     posn_old = (posn[0] + CENTER[0], posn[1] + CENTER[1])
     # But this actually works? At least for SPHERE data - need to see what's up with GPI TODO
     posn_pyn = (CENTER[0]+x_pix,CENTER[1]+y_pix)
-    #if "gpi"in instrument.lower():
-    #posn_pyn = posn_old # Keeping this the old way for now just in case
-    # Sanity chec the posn
     print(CENTER,posn,posn_old,posn_pyn,x_pix,y_pix)
+
+    if "gpi"in instrument.lower():
+        new_cent = (np.mean(dataset.centers[:,0]),np.mean(dataset.centers[:,1]))
+        posn_pyn = (new_cent[0]+x_pix,new_cent[1]+y_pix) # Keeping this the old way for now just in case
+    # Sanity chec the posn
     #if not cont:
     # Run ADI for each channel individually
     run_all_channels(nChannels,
@@ -307,7 +310,7 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
                                        tolerance = 0.0005, # tighter tolerance is good
                                        pca_number = pcas, #listed above
                                        cent_size = 0.2, # how much to block out
-                                       offset = 1.0) #use fixed astrometry from KLIP
+                                       offset = 3.0) #use fixed astrometry from KLIP
 
     pipeline.add_module(module)
     pipeline.run()
@@ -437,6 +440,7 @@ def combine_residuals(output_name, nChannels):
 # Save contrasts to a useable array
 def save_contrasts(nChannels,base_name,output_place,output_name):
     print("Saving contrast spectrum for " + planet_name)
+    print(NORMFACTOR)
     contrasts = [] # the contrast of the planet itself
     for pca in pcas:
         contrast = []
@@ -446,7 +450,7 @@ def save_contrasts(nChannels,base_name,output_place,output_name):
             contrast.append(samples[-1][4]*NORMFACTOR)
         contrasts.append(contrast)
     cont = np.array(contrasts)
-    np.save(output_place + output_name +  "_contrasts",cont) # saved in magnitude units
+    np.save(output_place + output_name +  "_contrasts",cont) # saved in contrast units
     return cont
 
 # Normalize with stellar flux
@@ -454,8 +458,9 @@ def save_flux(contrasts):
     print("Saving flux calibrated spectrum for " + planet_name)
     stellar_model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_"+ instrument.upper() +"_fullfit_10pc.dat").T
     fluxes = []
+    print(distance)
     for i in range(len(pcas)):
-        fluxes.append(stellar_model[1]*contrasts[i]* NORMFACTOR*(distance/10.)**2)
+        fluxes.append(stellar_model[1]*contrasts[i]*(distance/10.)**2)
     fluxes = np.array(fluxes)
     np.save(data_dir + "pynpoint/" + instrument + "_" + planet_name + "_flux_10pc_7200K",fluxes) # Saved in W/m2/micron at 10pc
 
@@ -535,7 +540,7 @@ def preproc_files(skip = False):
         spot_to_star_ratio = dataset.spot_ratio[band]
         NORMFACTOR = spot_to_star_ratio
 
-        #CENTER = (np.mean(dataset.centers[:,0]),np.mean(dataset.centers[:,1]))
+        CENTER = (np.mean(dataset.centers[:,0]),np.mean(dataset.centers[:,1]))
 
         # Need to order the GPI data for pynpoint
         shape = dataset.input.shape
@@ -550,9 +555,9 @@ def preproc_files(skip = False):
             # The PSF center isn't aligned with the image center, so let's fix that
             centx = dataset.centers.reshape(len(filelist),37,2)[:,channel,0]
             centy = dataset.centers.reshape(len(filelist),37,2)[:,channel,1]
-            shiftx,shifty = (int((frame.shape[-2]/2))*np.ones_like(centx) - centx,
-                             (int(frame.shape[-1]/2))*np.ones_like(centy) - centy)
-            shifted = vip.preproc.recentering.cube_shift(frame,shiftx,shifty)
+            shiftx,shifty = (CENTER[0]*np.ones_like(centx) - centx,
+                             CENTER[1]*np.ones_like(centy) - centy)
+            shifted = recentering.cube_shift(frame,shiftx,shifty)
 
             # Copy the GPI header, and add some notes of our own
             header_hdul = fits.open(filelist[0])
@@ -593,7 +598,7 @@ def preproc_files(skip = False):
                                 ((padx,padx+1),
                                 (pady,pady+1)),
                                 'constant')
-                    padded = vip.preproc.recentering.frame_shift(padded,0.5,0.5)
+                    padded = recentering.frame_shift(padded,0.5,0.5)
                 else:
                     padded = np.pad(frame,
                                     ((padx,padx),
@@ -690,14 +695,14 @@ def set_fwhm(channel):
         psf_name = glob.glob(data_dir + "*-original_PSF_cube.fits")[0]
     hdul = fits.open(psf_name)
     psfs = hdul[0].data
-    global fwhm
-    if len(psfs.shape) ==4 :
-        fwhm_fit = vip.var.fit_2dgaussian(psfs[int(channel),0], crop=True, cropsize=11, debug=False)
-    else:
-        fwhm_fit = vip.var.fit_2dgaussian(psfs[int(channel)], crop=True, cropsize=11, debug=False)
+    #global fwhm
+    #if len(psfs.shape) ==4 :
+    #    fwhm_fit = var.fit_2dgaussian(psfs[int(channel),0], crop=True, cropsize=11, debug=False)
+    #else:
+    #    fwhm_fit = var.fit_2dgaussian(psfs[int(channel)], crop=True, cropsize=11, debug=False)
 
-    fwhm = np.mean(np.array([fwhm_fit['fwhm_y'],fwhm_fit['fwhm_x']]))*pixscale # fit for fwhm
-    hdul.close()
+    #fwhm = np.mean(np.array([fwhm_fit['fwhm_y'],fwhm_fit['fwhm_x']]))*pixscale # fit for fwhm
+    #hdul.close()
     return
 
 #################

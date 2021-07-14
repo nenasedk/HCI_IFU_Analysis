@@ -17,7 +17,7 @@ from matplotlib import rcParams
 from matplotlib import rc
 #rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
 #rc('font',**{'family':'serif','serif':['Palatino']})
-#rc('text', usetex=True)  
+#rc('text', usetex=True)
 
 from astropy.io import fits
 from scipy.ndimage import rotate
@@ -40,7 +40,7 @@ instrument = "GPI"
 planet_name = "HR8799e" # Name to give to all outputs
 distance = 41.2925 #pc
 
-numthreads = 10
+numthreads = 1
 pixscale = 0.00746
 fwhm = 3.5
 
@@ -52,7 +52,7 @@ CENTER = (0,0)
 def main(args):
     sys.path.append(os.getcwd())
 
-    global data_dir 
+    global data_dir
     global instrument
     global planet_name
     global DIT_SCIENCE
@@ -64,8 +64,8 @@ def main(args):
     parser.add_argument("path", type=str, default= "/u/nnas/data/")
     # What instrument are we using - expects: SPHEREYJH, SPHEREYJ, GPIH, GPIK1, GPIK2
     parser.add_argument("instrument", type=str, default= "GPI")
-    # Name of the planet we're looking at 
-    parser.add_argument("name", type=str, default= "HR8799")   
+    # Name of the planet we're looking at
+    parser.add_argument("name", type=str, default= "HR8799")
     # Separation in mas and posn in PA (two floats for input)
     parser.add_argument("posn", type=float, nargs = "+")
     # OBJECT/SCIENCE and OBJECT/FLUX integration times for normalisation
@@ -92,7 +92,9 @@ def main(args):
     stellar_model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_" + instrument.upper() + "_fullfit_10pc.dat").T
 
     science,angles,wlen,psfs = init()
-
+    psfs = even_shape(psfs)
+    science = even_shape(science)
+    print(science.shape,psfs.shape)
     # Check for KLIP astrometry and either read in or create
     if not os.path.exists(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):
         if "gpi" in instrument.lower():
@@ -101,7 +103,7 @@ def main(args):
             dataset = init_sphere(data_dir)
         PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
         # posn is in sep [mas] and PA [degree], we need offsets in x and y px
-        posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
+        #posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
 
     # read_astrometry gives offsets in x,y, need to compute absolute posns
     posn_dict = read_astrometry(data_dir,planet_name)
@@ -109,6 +111,19 @@ def main(args):
     contrasts, snrs = run_andromeda(science,angles,wlen,psfs)
     aperture_phot_extract(contrasts,posn)
     return
+
+def even_shape(data):
+    if not (data.shape[-1])%2 == 0:
+        if len(data.shape) == 3:
+            cube = cube_shift(data[:,:-1,:-1],-0.5,-0.5)
+            return cube
+        else:
+            stack = []
+            for entry in data:
+                stack.append(cube_shift(entry[:,:-1,:-1],-0.5,-0.5))
+            return np.array(stack)
+    else:
+        return data
 
 def init():
     global pixscale
@@ -118,13 +133,13 @@ def init():
         if os.path.isfile(data_dir + "psf_satellites_calibrated.fits"):
             psf_name= "psf_satellites_calibrated.fits"
         else:
-            psf_name = "psf_cube.fits"        
+            psf_name = "psf_cube.fits"
         # sanity check on wlen units
         hdul_w = fits.open(data_dir + "wavelength.fits")
         if np.mean(hdul_w[0].data)>100.:
             hdu_wlen = fits.PrimaryHDU([hdul_w[0].data/1000])
             hdul_wlen = fits.HDUList([hdu_wlen])
-            hdul_wlen.writeto(data_dir + "wavelength.fits",overwrite=True)        
+            hdul_wlen.writeto(data_dir + "wavelength.fits",overwrite=True)
         parang_name = "parang_removed.fits"
         wlen_name = "wavelength.fits"
 
@@ -191,14 +206,14 @@ def init():
         hdul_new.writeto(data_dir + "HR8799_"+instrument + 'pyklip_frames_removed.fits', overwrite = True,
                          checksum=True,output_verify='exception')
         header_hdul.close()
-        
+
         # Save wavelengths
         hdu = fits.PrimaryHDU(dataset.wvs[:37])
         hdul_new = fits.HDUList([hdu])
         hdul_new.writeto(data_dir + "wavelength.fits",overwrite = True)
         wlen = dataset.wvs[:37]
         # pyklip does weird things with the PAs, so let's fix that.
-        # Keep or remove dataset.ifs_rotation? GPI IFS is rotated 23.5 deg, 
+        # Keep or remove dataset.ifs_rotation? GPI IFS is rotated 23.5 deg,
         angles = (dataset.PAs.reshape(len(filelist),37)[:,0] + 180.0)
         hdu = fits.PrimaryHDU(angles)
         hdul_new = fits.HDUList([hdu])
@@ -241,40 +256,39 @@ def run_andromeda(data,angles,wlen,psfs):
 
     for i,stack in enumerate(data):
         set_fwhm(psfs,i)
-        if len(psfs.shape)==4:
-            size = psfs.shape[2]
-            psfs = np.mean(psfs,axis=1)
-            psf, shy1, shx1 = cube_recenter_2dfit(psfs[i,:,int(size/2-11):int(size/2+11),int(size/2-11):int(size/2+11)], 
-                                    xy=(11,11), fwhm=fwhm, nproc=1, subi_size=6, 
-                                    model='gauss', negative=False, full_output=True, debug=False,plot=False)
+        if data.shape[-1]%2 != 0:
+            if len(psfs.shape)==4:
+                size = psfs.shape[2]
+                psfs = np.mean(psfs,axis=1)
+                psf, shy1, shx1 = cube_recenter_2dfit(psfs[i,:,int(size/2-11):int(size/2+11),int(size/2-11):int(size/2+11)],
+                                        xy=(11,11), fwhm=fwhm, nproc=1, subi_size=6,
+                                        model='gauss', negative=False, full_output=True, debug=False,plot=False)
 
-            cube, shy1, shx1 = cube_recenter_2dfit(stack[:,:-1,:-1], 
-                                               xy=(int(CENTER[0]),int(CENTER[1])), fwhm=fwhm, nproc=1, subi_size=6, 
-                                               model='gauss', negative=False, full_output=True, debug=False,plot=False)                        
-            psf = np.mean(psf,axis=1)
-
+                cube, shy1, shx1 = cube_recenter_2dfit(stack,
+                                                xy=(int(CENTER[0]),int(CENTER[1])), fwhm=fwhm, nproc=1, subi_size=6,
+                                                model='gauss', negative=False, full_output=True, debug=False,plot=False)
+                psf = np.mean(psf,axis=1)
         else:
-            psf = psfs[i]
-            cube = cube_shift(stack[:,:-1,:-1],
-                                -0.5,
-                                -0.5)
-                                #(stack.shape[-1]/2.0 - CENTER[1])-0.5,
-                                #(stack.shape[-2]/2.0 - CENTER[0])-0.5)
+            cube = stack
+            psf = np.nan_to_num(psfs[i])
+
         ang = angles
+
         if "sphere" in instrument.lower():
             ang = -1*angles
 
         PIXSCALE_NYQUIST = (1/2.*wlen[i]*1e-6/diam_tel)*180*3600*1e3/np.pi # Pixscale at Shannon [mas/px]
         oversampling = PIXSCALE_NYQUIST /  pixscale                # Oversampling factor [1]
+        print(PIXSCALE_NYQUIST,oversampling, psf.shape,cube.shape, ang.shape)
         contrast,snr,snr_norm,std_contrast,std_contrast_norm,_,_ = andromeda(cube=np.nan_to_num(cube),
                                                                             oversampling_fact=oversampling,
-                                                                            angles=ang, 
+                                                                            angles=ang,
                                                                             psf=psf,
                                                                             filtering_fraction = 0.25,
                                                                             min_sep=0.5,
-                                                                            iwa=4.0,
-                                                                            annuli_width = 1.0,
-                                                                            owa=40.,
+                                                                            iwa=1.0,
+                                                                            annuli_width = 2.0,
+                                                                            owa=64.,
                                                                             opt_method='no',
                                                                             fast=False,
                                                                             nproc=numthreads,
@@ -294,7 +308,7 @@ def run_andromeda(data,angles,wlen,psfs):
     std_norms = np.array(std_norms)
 
     if not os.path.isdir(output_dir):
-        os.makedirs(output_dir, exist_ok=True) 
+        os.makedirs(output_dir, exist_ok=True)
     np.save(output_dir + instrument+ "_"+ planet_name +"_contrastmap",contrasts)
     np.save(output_dir + instrument+ "_"+ planet_name +"_snr",snrs)
     np.save(output_dir + instrument+ "_"+ planet_name +"_stds",stds)
@@ -316,7 +330,7 @@ def run_andromeda(data,angles,wlen,psfs):
 
 def aperture_phot_extract(contrasts,posn):
     mask = create_circular_mask(contrasts.shape[1],contrasts.shape[2],
-                            center = posn, 
+                            center = posn,
                             radius = 3)
     aperture = CircularAperture([posn], r=3)
     spectrum = []
@@ -339,9 +353,9 @@ def guess_flux(cube,posn):
         PIXSCALE_NYQUIST = (1/2.*wlen[37]*1e-6/diam_tel)/np.pi*180*3600*1e3 # Pixscale at Shannon [mas/px]
         oversampling = PIXSCALE_NYQUIST /  pixscale                # Oversampling factor [1]
         print(oversampling)
-        psf, shy1, shx1 = cube_recenter_2dfit(psfs[37,:,int(255/2-6):int(255/2+6),int(255/2-6):int(255/2+6)], 
-                                            xy=(6,6), fwhm=fwhm, nproc=1, subi_size=6, 
-                                            model='gauss', negative=False, 
+        psf, shy1, shx1 = cube_recenter_2dfit(psfs[37,:,int(255/2-6):int(255/2+6),int(255/2-6):int(255/2+6)],
+                                            xy=(6,6), fwhm=fwhm, nproc=1, subi_size=6,
+                                            model='gauss', negative=False,
                                             full_output=True, debug=False,plot=False)
         print(psf.shape)
         psf = np.median(psf,axis=0)
@@ -349,7 +363,7 @@ def guess_flux(cube,posn):
         plot_frames(psf, grid=True, size_factor=4)
 
         r_0, theta_0, f_0 = firstguess(frame, angles, psf, ncomp=30, plsc=pxscale,
-                                    planets_xy_coord=[(159, 109)], fwhm=fwhm, 
+                                    planets_xy_coord=[(159, 109)], fwhm=fwhm,
                                     f_range=None, annulus_width=3, aperture_radius=3,
                                     simplex=True, plot=True, verbose=True)
         rs.append(r_0)
@@ -367,18 +381,18 @@ def mcmc_flux(snrs,rs,ts,fs):
     for i,frame in enumerate(snrs):
         init = np.array([rs[i],ts[i],fs[i]]) #r,theta,flux
         psf = np.median(psf[i],axis=0)
-        chain = mcmc_negfc_sampling(frame, angles, psf, ncomp=30, plsc=pixscale/1000,                                
-                                    fwhm=fwhm, svd_mode='lapack', annulus_width=3, 
-                                    aperture_radius=3, initial_state=init, nwalkers=nwalkers, 
+        chain = mcmc_negfc_sampling(frame, angles, psf, ncomp=30, plsc=pixscale/1000,
+                                    fwhm=fwhm, svd_mode='lapack', annulus_width=3,
+                                    aperture_radius=3, initial_state=init, nwalkers=nwalkers,
                                     bounds=None, niteration_min=itermin, rhat_count_threshold=1,
                                     niteration_limit=itermax, check_maxgap=50, nproc=numthreads,
                                     display=False, verbosity=1, save=False)
         burnin = 0.3
         isamples_flat = chain[:, int(chain.shape[1]//(1/burnin)):, :].reshape((-1,3))
 
-        val_max, conf = confidence(isamples_flat, cfd=68, gaussian_fit=True, 
+        val_max, conf = confidence(isamples_flat, cfd=68, gaussian_fit=True,
                                 verbose=True, save=False, title='fake planet')
-        
+
         maxs.append(val_max)
         confs.append(conf)
     maxs = np.array(maxs)

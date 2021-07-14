@@ -23,7 +23,7 @@ import spectres
 
 # Matplotlib styling
 #rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
-#rc('text', usetex=True)  
+#rc('text', usetex=True)
 
 instrument = "GPI"
 numthreads = 4
@@ -51,10 +51,10 @@ def init_sphere(data_dir):
         hdul_wlen = fits.HDUList([hdu_wlen])
         hdul_wlen.writeto(data_dir + "wavelength.fits",overwrite=True)
 
-    dataset = SPHERE.Ifs(datacube, 
+    dataset = SPHERE.Ifs(datacube,
                          psfcube,
                          fitsinfo,
-                         wvinfo, 
+                         wvinfo,
                          nan_mask_boxsize=9,
                          psf_cube_size = 13)
     print("read in data")
@@ -70,7 +70,7 @@ def init_gpi(data_dir):
 
     psf = fits.open(psf_name)[0].data
     if not os.path.isdir(data_dir + "pyklip"):
-        os.makedirs(data_dir + "pyklip", exist_ok=True) 
+        os.makedirs(data_dir + "pyklip", exist_ok=True)
 
     filelist = sorted(glob.glob(data_dir +"*distorcorr.fits"))
     dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True)
@@ -98,7 +98,7 @@ def init_psfs(dataset):
         #dn_per_contrast = np.squeeze(np.array([star_peaks[np.where(psfs_wvs==wv)[0]] for wv in dataset.wvs]))
 
         return dataset.psfs, dataset.psfs, dataset.dn_per_contrast
-    
+
     if "K" in instrument:
         # In case we're skipping a few K band channels
         dataset.generate_psfs(11)
@@ -156,11 +156,12 @@ def get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, pl
     # You should change these to be suited to your data!
     outputdir = data_dir + "pyklip/" # where to write the output files
     prefix = instrument + "_" + planet_name + "_fmpsf" # fileprefix for the output files
-    annulus_bounds = [[guesssep-11, guesssep+11]] # one annulus centered on the planet, one for covariance
     stamp_size = 11
-    subsections = [[(guesspa-1.5*stamp_size)/180.*np.pi,(guesspa+1.5*stamp_size)/180.*np.pi]] # we are not breaking up the annulus
+    annulus_bounds = [[guesssep-3*stamp_size, guesssep+3*stamp_size]] # one annulus centered on the planet, one for covariance
+
+    subsections = [[(guesspa-3.0*stamp_size)/180.*np.pi,(guesspa+3.0*stamp_size)/180.*np.pi]] # we are not breaking up the annulus
     padding = 0 # we are not padding our zones
-    movement = 4 # we are using an conservative exclusion criteria of 4 pixels
+    movement = 2 # we are using an conservative exclusion criteria of 4 pixels
     numbasis = [5,10]
     # run KLIP-FM
     fm.klip_dataset(dataset, fm_class, outputdir=outputdir, fileprefix=prefix, numbasis=numbasis,
@@ -207,9 +208,9 @@ def get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, pl
     fit.set_kernel("matern32", [corr_len_guess], [corr_len_label])
     # set bounds
 
-    x_range = 6 # pixels
-    y_range = 6 # pixels
-    flux_range = 1. # flux can vary by an order of magnitude
+    x_range = 5 # pixels
+    y_range = 5 # pixels
+    flux_range = 2 # flux can vary by an order of magnitude
     corr_len_range = 3. # between 0.3 and 30
     fit.set_bounds(x_range, y_range, flux_range, [corr_len_range])
 
@@ -223,10 +224,10 @@ def get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, pl
         platescale = dataset.platescale*1000
         plate_err = 0.02
     # Outputs and Erro Propagation
-    fit.propogate_errs(star_center_err=0.05, 
-                       platescale=platescale, 
-                       platescale_err=plate_err, 
-                       pa_offset=-0.1, 
+    fit.propogate_errs(star_center_err=0.05,
+                       platescale=platescale,
+                       platescale_err=plate_err,
+                       pa_offset=-0.1,
                        pa_uncertainty=0.13)
 
     write_astrometry(fit,data_dir,planet_name)
