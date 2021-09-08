@@ -160,10 +160,10 @@ def main(args):
     # But this actually works? At least for SPHERE data - need to see what's up with GPI TODO
     posn_pyn = (CENTER[0]+x_pix,CENTER[1]+y_pix)
     print(CENTER,posn,posn_old,posn_pyn,x_pix,y_pix)
-
-    if "gpi"in instrument.lower():
-        new_cent = (np.mean(dataset.centers[:,0]),np.mean(dataset.centers[:,1]))
-        posn_pyn = (new_cent[0]+x_pix,new_cent[1]+y_pix) # Keeping this the old way for now just in case
+    posn_pyn=posn_old
+    #if "gpi"in instrument.lower():
+    #    new_cent = (np.mean(dataset.centers[:,0]),np.mean(dataset.centers[:,1]))
+    #    posn_pyn = (new_cent[0]+x_pix,new_cent[1]+y_pix) # Keeping this the old way for now just in case
     # Sanity chec the posn
     #if not cont:
     # Run ADI for each channel individually
@@ -296,7 +296,7 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
                                   iterate=3)
 
     pipeline.add_module(module)
-
+    app = 6.*pixscale
     module = SimplexMinimizationModule(name_in = 'simplex',
                                        image_in_tag = 'science_bad',
                                        psf_in_tag = 'psf',
@@ -306,10 +306,10 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
                                        magnitude = 14.0, # approximate planet contrast in mag
                                        psf_scaling = -1, # deal with spectrum mormalization later
                                        merit = 'gaussian', #better than hessian
-                                       aperture = 0.04, # in arcsec
+                                       aperture = app, # in arcsec
                                        tolerance = 0.0005, # tighter tolerance is good
                                        pca_number = pcas, #listed above
-                                       cent_size = 0.2, # how much to block out
+                                       cent_size = 0.12, # how much to block out
                                        offset = 3.0) #use fixed astrometry from KLIP
 
     pipeline.add_module(module)
@@ -557,7 +557,7 @@ def preproc_files(skip = False):
             centy = dataset.centers.reshape(len(filelist),37,2)[:,channel,1]
             shiftx,shifty = (CENTER[0]*np.ones_like(centx) - centx,
                              CENTER[1]*np.ones_like(centy) - centy)
-            shifted = recentering.cube_shift(frame,shiftx,shifty)
+            shifted = recentering.cube_shift(frame,shifty,shiftx)
 
             # Copy the GPI header, and add some notes of our own
             header_hdul = fits.open(filelist[0])

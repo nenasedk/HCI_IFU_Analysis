@@ -44,8 +44,8 @@ numthreads = 1
 pixscale = 0.00746
 fwhm = 3.5
 
-DIT_SCIENCE = 64.0 # Set with argparse
-DIT_FLUX = 4.0 # Set with argparse
+DIT_SCIENCE = 1.0 # Set with argparse
+DIT_FLUX = 1.0 # Set with argparse
 NORMFACTOR = 1.0 # updated based on instrument and/or DITS
 CENTER = (0,0)
 
@@ -107,9 +107,22 @@ def main(args):
 
     # read_astrometry gives offsets in x,y, need to compute absolute posns
     posn_dict = read_astrometry(data_dir,planet_name)
-    posn = (-1*posn_dict["Px RA offset [px]"][0] +CENTER[0], -1*posn_dict["Px Dec offset [px]"][0]+CENTER[1])
-    contrasts, snrs = run_andromeda(science,angles,wlen,psfs)
-    aperture_phot_extract(contrasts,posn)
+
+    shift = 0.0 # NO SHIFT FOR YJ DATA TO BE
+    x_pix = ((posn_dict["Separation [mas]"][0]/1000)/pixscale)*np.sin((shift-posn_dict["PA [deg]"][0]) * np.pi / 180.)
+    y_pix = ((posn_dict["Separation [mas]"][0]/1000)/pixscale)*np.cos((shift-posn_dict["PA [deg]"][0]) * np.pi / 180.)
+
+    # read_astrometry gives offsets in x,y, need to compute absolute posns
+    posn = (-1*posn_dict["Px RA offset [px]"][0], -1*posn_dict["Px Dec offset [px]"][0])
+    posn_old = (posn[0] + CENTER[0], posn[1] + CENTER[1])
+    # But this actually works? At least for SPHERE data - need to see what's up with GPI TODO
+    posn_and = posn_old#
+    psn = (CENTER[0]+x_pix,CENTER[1]+y_pix)
+    print(CENTER,posn_and,posn,psn,x_pix,y_pix)
+
+    contrasts, snrs, stds = run_andromeda(science,angles,wlen,psfs)
+    aperture_phot_extract(contrasts,stds,psfs,wlen,posn_and)
+    #guess_flux(contrasts,posn_and,wlen,angles,psfs)
     return
 
 def even_shape(data):
@@ -161,6 +174,9 @@ def init():
         # PSF Data
         psf_hdul = fits.open(data_dir + psf_name)
         psfs = psf_hdul[0].data
+        print(psfs.shape)
+        psfs = psfs[:, int(255/2 - 20):int(255/2 + 20),int(255/2 - 20):int(255/2 + 20)]
+        print(psfs.shape)
         psf_hdul.close()
 
     elif "gpi" in instrument.lower():
@@ -174,7 +190,7 @@ def init():
         # Assuming standard GPI naming scheme
         filelist = sorted(glob.glob(data_dir +science_name))
         dataset = GPI.GPIData(filelist, highpass=True, PSF_cube = psfs,recalc_centers=True)
-        dataset.generate_psf_cube(30)
+        dataset.generate_psf_cube(14)
         psfs = dataset.psfs
         band = dataset.prihdrs[0]['APODIZER'].split('_')[1]
         spot_to_star_ratio = dataset.spot_ratio[band]
@@ -188,15 +204,21 @@ def init():
         science_pyn = []
         for channel,frame in enumerate(science[:]):
             # The PSF center isn't aligned with the image center, so let's fix that
+            frame = frame[:,:-1,:-1]
+
             centx = dataset.centers.reshape(len(filelist),37,2)[:,channel,0]
             centy = dataset.centers.reshape(len(filelist),37,2)[:,channel,1]
-            shiftx,shifty = (int((frame.shape[-2]/2))*np.ones_like(centx) - centx,
-                             (int(frame.shape[-1]/2))*np.ones_like(centy) - centy)
-            shifted = vip.preproc.recentering.cube_shift(frame,shiftx,shifty)
+            shiftx,shifty = (int((frame.shape[-2]/2.))*np.ones_like(centx) - centx,
+                             (int(frame.shape[-1]/2.))*np.ones_like(centy) - centy)
+            shifted = vip.preproc.recentering.cube_shift(frame,shifty,shiftx)
             # Save for a full file, not channel by channel
             science_pyn.append(shifted)
         # Save the full file (wlens,nframes,x,y)
-        hdu = fits.PrimaryHDU(np.array(science_pyn))
+        science_pyn = np.array(science_pyn)
+        science = science_pyn
+        CENTER = (science.shape[-2]/2.0,science.shape[-1]/2.0)
+
+        hdu = fits.PrimaryHDU(science_pyn)
         header_hdul = fits.open(filelist[0])
         hdu.header = header_hdul[0].header
         hdu.header.update(header_hdul[1].header)
@@ -273,22 +295,32 @@ def run_andromeda(data,angles,wlen,psfs):
             psf = np.nan_to_num(psfs[i])
 
         ang = angles
-
-        if "sphere" in instrument.lower():
-            ang = -1*angles
-
         PIXSCALE_NYQUIST = (1/2.*wlen[i]*1e-6/diam_tel)*180*3600*1e3/np.pi # Pixscale at Shannon [mas/px]
         oversampling = PIXSCALE_NYQUIST /  pixscale                # Oversampling factor [1]
+
+        if "sphere" in instrument.lower():
+            #ang = -1*angles
+            iwa = 2.0
+            min_sep = 0.45
+            owa = 58./oversampling
+            width = 1.0
+        else:
+            iwa = 1.0
+            min_sep = 0.25
+            owa = 45./oversampling
+            #if 'k2' in instrument.lower():
+            #    owa = 38
+            width = 1.2
         print(PIXSCALE_NYQUIST,oversampling, psf.shape,cube.shape, ang.shape)
         contrast,snr,snr_norm,std_contrast,std_contrast_norm,_,_ = andromeda(cube=np.nan_to_num(cube),
                                                                             oversampling_fact=oversampling,
                                                                             angles=ang,
                                                                             psf=psf,
                                                                             filtering_fraction = 0.25,
-                                                                            min_sep=0.5,
-                                                                            iwa=1.0,
-                                                                            annuli_width = 2.0,
-                                                                            owa=64.,
+                                                                            min_sep=min_sep,
+                                                                            iwa=iwa,
+                                                                            annuli_width = width,
+                                                                            owa=owa,
                                                                             opt_method='no',
                                                                             fast=False,
                                                                             nproc=numthreads,
@@ -326,53 +358,86 @@ def run_andromeda(data,angles,wlen,psfs):
     hdul_new = fits.HDUList([hdu])
     hdul_new.writeto(output_dir + instrument+ "_"+ planet_name + "_snrs.fits",overwrite=True)
 
-    return contrasts, snrs
+    return contrasts, snrs, stds
 
-def aperture_phot_extract(contrasts,posn):
+def aperture_phot_extract(contrasts,stds,psfs,wlen,posn):
     mask = create_circular_mask(contrasts.shape[1],contrasts.shape[2],
                             center = posn,
                             radius = 3)
     aperture = CircularAperture([posn], r=3)
+
+    #Contrast
     spectrum = []
-    for frame in contrasts:
+    #fit_spec = []
+    for i,frame in enumerate(contrasts):
+        set_fwhm(psfs,i)
         phot_table = aperture_photometry(frame,aperture)
         spectrum.append(phot_table['aperture_sum'][0])
+        flux_fit = vip.var.fit_2dgaussian(frame, crop=True, cropsize=9,
+                                          cent = posn, fwhmx = fwhm,
+                                          fwhmy = fwhm, debug=False,
+                                          full_output=True)
+        #fit_spec.append(np.array([flux_fit['amplitude'],flux_fit['centroid_x'],flux_fit['centroid_y']]))
+    #fit_spec = np.array(fit_spec)
     spectrum = np.array(spectrum)
-    np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "contrast",spectrum)
+    np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_contrast",spectrum)
+    #np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_fit_contrast",fit_spec)
+
+    # Error
+    errs = []
+    for i,frame in enumerate(stds):
+        set_fwhm(psfs,i)
+        phot_table = aperture_photometry(frame,aperture)
+        errs.append(phot_table['aperture_sum'][0])
+    errs = np.array(errs)
+    np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_conterr",errs)
+
+    # Flux
+    stellar_model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_"+ instrument.upper() +"_fullfit_10pc.dat").T
+    fluxes = stellar_model[1]*spectrum*(distance/10.)**2
+    np.save(data_dir + "andromeda/" + instrument + "_" + planet_name + "_flux_10pc_7200K",fluxes)
+
+    #Plotting
+    fig,ax = plt.subplots(figsize = (16,10))
+    ax.set_xlabel("Wavelength [micron]")
+    ax.set_ylabel("Contrast")
+    ax.set_title(instrument + " " + planet_name + "Contrast And")
+    ax.errorbar(wlen,spectrum,yerr=errs,label="Aperture Photometry")
+    #ax.plot(wlen,fit_spec[:,0],label="Fit")
+    plt.legend()
+    plt.savefig(data_dir + "andromeda/" + instrument + "_" + planet_name +"_contrasts_AND.pdf")
+
     return spectrum
 
-def guess_flux(cube,posn):
+def guess_flux(cube,posn,wlen,angles,psfs):
     rs = [] #radius (separation)
     ts = [] #theta (position angle)
     fs = [] #flux
-    output_dir = data_dir + "andromeda/"
-    rs = [],
-    ts = []
-    fs = []
+    global pixscale
+    if "sphere" in instrument.lower():
+        diam_tel = 8.3                                            # Telescope diameter [m]
+        pixscale = 7.46                                           # Pixscale [mas/px]
+    else:
+        diam_tel = 10.                                             # Telescope diameter [m]
+        pixscale =  0.014161 *1000                                 # Pixscale [mas/px]
     for i,frame in enumerate(cube):
-        PIXSCALE_NYQUIST = (1/2.*wlen[37]*1e-6/diam_tel)/np.pi*180*3600*1e3 # Pixscale at Shannon [mas/px]
+        PIXSCALE_NYQUIST = (1/2.*wlen[i]*1e-6/diam_tel)/np.pi*180*3600*1e3 # Pixscale at Shannon [mas/px]
         oversampling = PIXSCALE_NYQUIST /  pixscale                # Oversampling factor [1]
-        print(oversampling)
-        psf, shy1, shx1 = cube_recenter_2dfit(psfs[37,:,int(255/2-6):int(255/2+6),int(255/2-6):int(255/2+6)],
-                                            xy=(6,6), fwhm=fwhm, nproc=1, subi_size=6,
-                                            model='gauss', negative=False,
-                                            full_output=True, debug=False,plot=False)
-        print(psf.shape)
-        psf = np.median(psf,axis=0)
+        psf = psfs[i]
         psf = vip.metrics.normalize_psf(psf, fwhm, size=11)
-        plot_frames(psf, grid=True, size_factor=4)
-
-        r_0, theta_0, f_0 = firstguess(frame, angles, psf, ncomp=30, plsc=pxscale,
-                                    planets_xy_coord=[(159, 109)], fwhm=fwhm,
+        #plot_frames(psf, grid=True, size_factor=4)
+        print(psf.shape,frame.shape)
+        r_0, theta_0, f_0 = firstguess(frame, angles, psf, ncomp=5, plsc=pixscale,
+                                    planets_xy_coord=[posn], fwhm=fwhm,
                                     f_range=None, annulus_width=3, aperture_radius=3,
-                                    simplex=True, plot=True, verbose=True)
+                                    simplex=True, plot=False, verbose=True)
         rs.append(r_0)
         ts.append(theta_0)
         fs.append(f_0)
     rs = np.array(rs)
     ts = np.array(ts)
     fs = np.array(fs)
-    np.save(output_dir + extraction_name + "_astrometry",np.array([rs,ts,fs]))
+    np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_astrometry",np.array([rs,ts,fs]))
 
 def mcmc_flux(snrs,rs,ts,fs):
     nwalkers, itermin, itermax = (100, 200, 500)

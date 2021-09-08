@@ -458,8 +458,8 @@ def mcmc_scaling(dataset,PSF_cube,posn,exspect,spot_to_star_ratio,stellar_model)
 
     scaling = np.array(scaling)
     sm = stellar_model[1]
-    np.save(data_dir + "pyklip/mcmc_scale_factor",scaling)
-    np.save(data_dir + "pyklip/scaled_spectrum",np.mean(scaling,axis=0)*exspect*spot_to_star_ratio*sm*(distance/10.)**2)
+    np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "_mcmc_scale_factor",scaling)
+    np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "_scaled_spectrum",np.mean(scaling,axis=0)*exspect*spot_to_star_ratio*sm*(distance/10.)**2)
 
 def combine_residuals():
     print("Combining residuals into fits file.")

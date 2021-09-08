@@ -78,12 +78,15 @@ def main(args):
 
     # Spectrum - the flux calibrated spectrum
     if os.path.exists(data_dir + "scaled_spectrum.npy"):
-        spectrum = np.load(data_dir +  "scaled_spectrum.npy")
+        spectrum = np.load(data_dir +  + instrument + "_" + planet_name + "_scaled_spectrum.npy")
     else:
         spectrum = np.load(data_dir + instrument + "_" + planet_name + "_flux_10pc_7200K.npy")
         spectrum = spectrum #* (60/8)**2
     # Contrast unit spectrum.
-    contrasts = np.load(data_dir + instrument + "_" + planet_name + "_contrasts.npy")
+    try:
+        contrasts = np.load(data_dir + instrument + "_" + planet_name + "_contrasts.npy")
+    except:
+        contrasts = np.load(data_dir + instrument + "_" + planet_name + "_contrast.npy")
     # Residuals - the full frame residuals from processing, in contrast units
     # Might need to be careful about naming here.
     print("Loading Data")
@@ -91,18 +94,18 @@ def main(args):
         residuals = np.load(data_dir + instrument + "_" + planet_name + "_residuals.npy")
     elif os.path.exists(data_dir + instrument + "_" + planet_name + "_residuals.fits"):
         hdul = fits.open(data_dir + instrument + "_" + planet_name + "_residuals.fits")
-        if "pynpoint" in data_dir:
+        if "pynpoint" in data_dir or "andromeda" in data_dir:
             dataind = 0
         else:
             dataind = 1
         residuals = np.array([hdu.data for hdu in hdul[dataind:]])
-        if "pynpoint" in data_dir:
+        if "pynpoint" in data_dir or "andromeda" in data_dir:
             residuals = residuals[0]
         print(residuals.shape)
     else:
         print("No residual file found!")
         return
-
+    print(residuals.shape)
     try:
         CENTER = (hdul[1].header['PSFCENTX'],hdul[1].header['PSFCENTX'])
     except:
@@ -113,7 +116,6 @@ def main(args):
 
 
     residuals = np.array(residuals)#*(8/60)**2
-    print(spectrum.shape,residuals.shape)
 
     # Checks to see if our residuals are for a full set of PCA components
     # Spectrum must have each PCA if residuals do.
@@ -135,7 +137,6 @@ def main(args):
     # Both real units and fractional error are returned
     total_err,frac_err,_,_ = uncorrelated_error(residuals,spectrum,nl,npca,flux_cal=True)
     #cont_err,frac_cont_err,_,_ = uncorrelated_error(residuals,contrasts,nl,npca)
-
     # Now we can compute the correlation and covariance matrices
     # The covariance matrix is normalised so that sqrt(diag(cov)) = uncorrelated error
     cor,cov = get_covariance(residuals,total_err,posn_dict,nl,npca)
@@ -253,6 +254,21 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
             annulus = annulus_c.to_mask(method='center')
             flux = annulus.multiply(mask*med)[annulus.data>0]
             fluxes.append(flux)
+            if i==25:
+                fig,ax = plt.subplots(ncols = 2, figsize=(16,8))
+                ax = ax.flatten()
+                im0 = ax[0].imshow(med)
+                im1 = ax[1].imshow(med*mask)
+                theta = np.linspace(0, 2*np.pi, 100)
+                a = r_out*np.cos(theta)+ CENTER[0]
+                b = r_out*np.sin(theta)+ CENTER[1]
+                c = r_in*np.cos(theta)+ CENTER[0]
+                d = r_in*np.sin(theta)+ CENTER[1]
+                ax[1].plot(a,b,c='r')
+                ax[1].plot(c,d,c='r')
+                plt.colorbar(im0,ax=ax[0])
+                plt.colorbar(im1,ax=ax[1])
+                plt.savefig(data_dir + "annulus_check.pdf")
         fluxes = np.array(fluxes)
         cor = np.zeros((fluxes.shape[0],fluxes.shape[0]))
         cov = np.zeros((fluxes.shape[0],fluxes.shape[0]))
@@ -263,7 +279,7 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
                 bottom = np.sqrt(np.mean(np.dot(fluxes[m],fluxes[m]))*np.mean(np.dot(fluxes[n],fluxes[n])))
                 #print(top,bottom)
                 cor[m,n] = top/bottom
-                cov[m,n] = top/bottom * (total_err[m]*total_err[n])**2
+                cov[m,n] = top/bottom * (total_err[m]*total_err[n])
 
         np.save(data_dir + instrument + "_" + planet_name + "_correlation",cor)
         np.save(data_dir + instrument + "_" + planet_name + "_covariance",cov)
@@ -376,7 +392,8 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
 
             # Assuming contrast units for residuals
             flux = annulus.multiply(med)[annulus.data>0]*stellar_model[i]
-            frac_err = 1/np.sqrt(np.var(flux) + spectrum[i])
+            frac_err= np.std(flux)/spectrum[i]
+
 
             fluxes.append(flux)
             uncor_err.append(frac_err)
