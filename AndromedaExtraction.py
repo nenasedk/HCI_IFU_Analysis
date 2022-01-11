@@ -141,7 +141,10 @@ def even_shape(data):
 def init():
     global pixscale
     global CENTER
+    global NORMFACTOR
+
     if "sphere" in instrument.lower():
+        NORMFACTOR = DIT_FLUX/DIT_SCIENCE
         science_name = "frames_removed.fits"
         if os.path.isfile(data_dir + "psf_satellites_calibrated.fits"):
             psf_name= "psf_satellites_calibrated.fits"
@@ -157,6 +160,7 @@ def init():
         wlen_name = "wavelength.fits"
 
         pixscale = 0.00746
+
         # Science Data
         hdul = fits.open(data_dir + science_name)
         science = hdul[0].data
@@ -325,8 +329,8 @@ def run_andromeda(data,angles,wlen,psfs):
                                                                             fast=False,
                                                                             nproc=numthreads,
                                                                             homogeneous_variance=True,
-                                                                            ditimg = DIT_SCIENCE,
-                                                                            ditpsf = DIT_FLUX,
+                                                                            ditimg = 1.0,
+                                                                            ditpsf = NORMFACTOR,
                                                                             verbose = True)
         contrasts.append(contrast)
         snrs.append(snr)

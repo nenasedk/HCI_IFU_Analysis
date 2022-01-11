@@ -58,8 +58,8 @@ fwhm = 3.5*0.01414 # fwhm will be recalculated
 pixscale = 0.00746 # pixscale is updated depending on instrument
 numthreads = 10 # Not important, read from config file
 
-DIT_SCIENCE = 64.0 # Set with argparse
-DIT_FLUX = 4.0 # Set with argparse
+DIT_SCIENCE = 1.0 # Set with argparse
+DIT_FLUX = 1.0 # Set with argparse
 NORMFACTOR = 1.0 # updated based on instrument and/or DITS
 CENTER = (0,0)
 
@@ -160,7 +160,7 @@ def main(args):
     # But this actually works? At least for SPHERE data - need to see what's up with GPI TODO
     posn_pyn = (CENTER[0]+x_pix,CENTER[1]+y_pix)
     print(CENTER,posn,posn_old,posn_pyn,x_pix,y_pix)
-    posn_pyn=posn_old
+    #posn_pyn=posn
     #if "gpi"in instrument.lower():
     #    new_cent = (np.mean(dataset.centers[:,0]),np.mean(dataset.centers[:,1]))
     #    posn_pyn = (new_cent[0]+x_pix,new_cent[1]+y_pix) # Keeping this the old way for now just in case
@@ -304,7 +304,7 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
                                        flux_position_tag = 'flux_pos_channel_' + channel +"_",
                                        position = posn,
                                        magnitude = 14.0, # approximate planet contrast in mag
-                                       psf_scaling = -1, # deal with spectrum mormalization later
+                                       psf_scaling = -1*NORMFACTOR, # deal with spectrum mormalization later
                                        merit = 'gaussian', #better than hessian
                                        aperture = app, # in arcsec
                                        tolerance = 0.0005, # tighter tolerance is good
@@ -377,7 +377,7 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
             hdul = fits.open(data_dir + "pynpoint/"+output_name+"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca)+".fits")
             data = hdul[0].data
             rpcas.append(data)
-            contrast.append(10.0**(data/2.5)*NORMFACTOR)
+            contrast.append(10.0**(data/2.5))
             hdul.close()
         rpcas = np.array(rpcas)
         contrast = np.array(contrast)
@@ -398,7 +398,7 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
     hdul.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_residuals.fits',
                  overwrite=True,checksum=True,output_verify='exception')
 
-def combine_residuals(output_name, nChannels):
+"""def combine_residuals(output_name, nChannels):
     print("Combining residuals into fits file.")
     hduls_c= []
     hduls_m= []
@@ -419,7 +419,7 @@ def combine_residuals(output_name, nChannels):
             hdul = fits.open(data_dir + "pynpoint/"+output_name+"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca)+".fits")
             data = hdul[0].data
             rpcas.append(data)
-            contrast.append(10.0**(data/2.5)*NORMFACTOR) # WHY IS 2.5 NOT NEGATIVE!?!?
+            contrast.append(10.0**(data/2.5)) # WHY IS 2.5 NOT NEGATIVE!?!? (Maybe because the PSF is negative in simplex?? Contrast vs an actual magnitude.)
             hdul.close()
         rpcas = np.array(rpcas)
         contrast = np.array(contrast)
@@ -435,7 +435,7 @@ def combine_residuals(output_name, nChannels):
     hdul_c.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_residuals.fits',
                    overwrite=True, checksum=True, output_verify='fix')
     hdul_m.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_magnitudes.fits',
-                   overwrite=True, checksum=True, output_verify='fix')
+                   overwrite=True, checksum=True, output_verify='fix')"""
 
 # Save contrasts to a useable array
 def save_contrasts(nChannels,base_name,output_place,output_name):
@@ -447,7 +447,7 @@ def save_contrasts(nChannels,base_name,output_place,output_name):
         for channel in range(nChannels):
             samples = np.genfromtxt(data_dir + "pynpoint/"+ output_name + "_ch" + str(channel).zfill(3) +"_flux_pos_out_pca_" +str(pca)+ ".dat")
             samples = 10**(samples/-2.5)
-            contrast.append(samples[-1][4]*NORMFACTOR)
+            contrast.append(samples[-1][4])
         contrasts.append(contrast)
     cont = np.array(contrasts)
     np.save(output_place + output_name +  "_contrasts",cont) # saved in contrast units

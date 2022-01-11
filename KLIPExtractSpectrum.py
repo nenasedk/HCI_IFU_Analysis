@@ -37,11 +37,11 @@ from Astrometry import get_astrometry, read_astrometry
 numbasis = np.array([3,4,5,8,10,12,15]) # "k_klip", this can be a list of any size.
 maxnumbasis = 20 # Max components to be calculated
 movement = 2.0 # aggressiveness for choosing reference library
-stamp_size = 11 # how big of a stamp around the companion in pixels
+stamp_size = 9 # how big of a stamp around the companion in pixels
                 # stamp will be stamp_size**2 pixels
 sections = 10
 distance = 41.2925 #pc
-numthreads = 4
+numthreads = 1
 
 # These constants are all updated later
 # Data dir must contain ALL files
@@ -54,8 +54,8 @@ data_dir = "/u/nnas/data/"
 instrument = "GPI"
 planet_name = "HR8799"
 pxscale = 0.01422
-DIT_SCIENCE = 64.0 # Set with argparse
-DIT_FLUX = 4.0 # Set with argparse
+DIT_SCIENCE = 1.0 # Set with argparse
+DIT_FLUX = 1.0 # Set with argparse
 skip = []
 def main(args):
     """
@@ -167,6 +167,8 @@ def init_sphere():
                          nan_mask_boxsize=9,
                          psf_cube_size = 15)
     print("read in data")
+    dataset.input = np.nan_to_num(dataset.input)
+
     return dataset
 
 def init_gpi():
@@ -252,7 +254,7 @@ def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
 
     ###### Now run KLIP! ######
     fm.klip_dataset(dataset, fm_class,
-                    fileprefix="fmspect",
+                    fileprefix=instrument + "_" + planet_name +"_fmspect",
                     annuli=[[planet_sep-1.5*stamp_size,planet_sep+1.5*stamp_size]], # select a patch around the planet (radius)
                     subsections=[[(planet_pa-2.0*stamp_size)/180.*np.pi,\
                                   (planet_pa+2.0*stamp_size)/180.*np.pi]], # select a patch around the planet (angle)
@@ -272,8 +274,8 @@ def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
     # Save all outputs for future reference
     klipped = dataset.fmout[:,:,-1,:]
     dn_per_contrast = dataset.dn_per_contrast
-    np.save(data_dir + "pyklip/klipped",klipped)
-    np.save(data_dir + "pyklip/dn_per_contrast",dn_per_contrast)
+    np.save(data_dir + "pyklip/" + instrument + "_" + planet_name + "klipped",klipped)
+    np.save(data_dir + "pyklip/" + instrument + "_" + planet_name + "dn_per_contrast",dn_per_contrast)
 
     # If you want to scale your spectrum by a calibration factor:
     units = "natural"
@@ -281,14 +283,14 @@ def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
     exspect, fm_matrix = es.invert_spect_fmodel(dataset.fmout, dataset, units=units,
                                                 scaling_factor=scaling_factor,
                                                 method="leastsq")
-    np.save(data_dir + "pyklip/exspect",exspect)
-    np.save(data_dir + "pyklip/fm_matrix",fm_matrix)
+    np.save(data_dir + "pyklip/" + instrument + "_" + planet_name + "exspect", exspect)
+    np.save(data_dir + "pyklip/" + instrument + "_" + planet_name + "fm_matrix", fm_matrix)
     return exspect, fm_matrix
 
 def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
     # Convert the extracted spectrum into contrast and flux units
     # spot_to_star_ratio - different for GPI and SPHERE
-    exspect_load = np.load(data_dir + "pyklip/exspect.npy")
+    exspect_load = np.load(data_dir + "pyklip/" + instrument + "_" + planet_name + "exspect.npy")
     print("Echeck")
     print(exspect[0]-exspect_load[0])
     # Useful constants
@@ -306,7 +308,7 @@ def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
     ax.set_title(instrument + " " + planet_name + " Contrast KLIP")
     m_cont = np.mean(exspect[:],axis=0)
     for i in range(num_k_klip):
-        ax.plot(wlen,exspect[i]*spot_to_star_ratio,label=str(numbasis[i]),alpha=0.5)
+        ax.plot(wlen,exspect[i]*spot_to_star_ratio*(DIT_FLUX/DIT_SCIENCE),label=str(numbasis[i]),alpha=0.5)
     ax.plot(wlen,m_cont*spot_to_star_ratio,label = 'Mean',linewidth=4)
     plt.legend()
     plt.savefig(data_dir + "pyklip/" + instrument + "_" + planet_name +"contrasts_KLIP.pdf")
@@ -332,13 +334,13 @@ def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
 
     # Save the data
     np.save(data_dir +"pyklip/" + instrument + "_" + planet_name + "_contrasts",
-            exspect*spot_to_star_ratio)
+            exspect*spot_to_star_ratio*(DIT_FLUX/DIT_SCIENCE))
     np.save(data_dir +"pyklip/"+ instrument + "_" + planet_name + "_flux_10pc_7200K",
-            exspect*spot_to_star_ratio*sm*((distance/10.)**2))
+            exspect*spot_to_star_ratio*sm*((distance/10.)**2)*(DIT_FLUX/DIT_SCIENCE))
     np.save(data_dir +"pyklip/"+ instrument + "_" + planet_name + "spot_to_star_ratio",spot_to_star_ratio)
 
     # Contrast, Flux Density (W/m^2/micron)
-    return exspect*spot_to_star_ratio,exspect*spot_to_star_ratio*sm*(distance/10.)**2
+    return exspect*spot_to_star_ratio*(DIT_FLUX/DIT_SCIENCE),exspect*spot_to_star_ratio*sm*(distance/10.)**2*(DIT_FLUX/DIT_SCIENCE)
 
 
 def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
@@ -359,7 +361,7 @@ def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
 
     ###### Now run KLIP! ######
     fm.klip_dataset(dataset, fm_class,
-                    fileprefix="fullframe",
+                    fileprefix=instrument + "_" + planet_name +"_fullframe",
                     annuli=12,
                     subsections=10,
                     movement=movement,
@@ -410,7 +412,7 @@ def recover_fake(dataset, PSF_cube, files, position, fake_flux, kklip):
                                datatype = 'float')
 
     fm.klip_dataset(tmp_dataset, fm_class,
-                        fileprefix="fakespect",
+                        fileprefix=instrument + "_" + planet_name +"_fakespect",
                         annuli=[[planet_sep-1.5*stamp_size,planet_sep+1.5*stamp_size]],
                         subsections=[[(pa-2.0*stamp_size)/180.*np.pi,\
                                       (pa+2.0*stamp_size)/180.*np.pi]],
@@ -454,12 +456,12 @@ def mcmc_scaling(dataset,PSF_cube,posn,exspect,spot_to_star_ratio,stellar_model)
         for p, para in enumerate(pas):
             fake_spectra[p,:] = recover_fake(dataset, PSF_cube, files, (planet_sep, para), input_spect, k)
             scaling.append((exspect[k,:]*spot_to_star_ratio)/(fake_spectra[p,:]/dataset.dn_per_contrast[:nl]))
-    np.save(data_dir + "pyklip/mcmc_outputs",fake_spectra)
+    np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "mcmc_outputs",fake_spectra)
 
     scaling = np.array(scaling)
     sm = stellar_model[1]
     np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "_mcmc_scale_factor",scaling)
-    np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "_scaled_spectrum",np.mean(scaling,axis=0)*exspect*spot_to_star_ratio*sm*(distance/10.)**2)
+    np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "_scaled_spectrum",np.mean(scaling,axis=0)*exspect*spot_to_star_ratio*(DIT_FLUX/DIT_SCIENCE)*sm*(distance/10.)**2)
 
 def combine_residuals():
     print("Combining residuals into fits file.")

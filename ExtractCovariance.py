@@ -33,8 +33,8 @@ planet_name = "HR8799e"
 pxscale = 0.00746
 CENTER = (0.,0.)
 nFrames = 1
-DIT_SCIENCE = 60.0
-DIT_FLUX = 8.0
+DIT_SCIENCE = 1.0
+DIT_FLUX = 1.0
 
 def main(args):
     sys.path.append(os.getcwd())
@@ -77,15 +77,19 @@ def main(args):
     posn_dict = read_astrometry(data_dir+"../",planet_name)
 
     # Spectrum - the flux calibrated spectrum
-    if os.path.exists(data_dir + "scaled_spectrum.npy"):
-        spectrum = np.load(data_dir +  + instrument + "_" + planet_name + "_scaled_spectrum.npy")
+    if os.path.exists(data_dir + instrument + "_" + planet_name + "_scaled_spectrum.npy"):
+        print("Using MCMC scaled spectrum")
+        spectrum = np.load(data_dir +  instrument + "_" + planet_name + "_scaled_spectrum.npy")
     else:
+        print("Using standard flux-calibrated spectrum")
         spectrum = np.load(data_dir + instrument + "_" + planet_name + "_flux_10pc_7200K.npy")
         spectrum = spectrum #* (60/8)**2
     # Contrast unit spectrum.
     try:
+        print("Using contrasts")
         contrasts = np.load(data_dir + instrument + "_" + planet_name + "_contrasts.npy")
     except:
+        print("Using contrasts")
         contrasts = np.load(data_dir + instrument + "_" + planet_name + "_contrast.npy")
     # Residuals - the full frame residuals from processing, in contrast units
     # Might need to be careful about naming here.
@@ -95,6 +99,7 @@ def main(args):
     elif os.path.exists(data_dir + instrument + "_" + planet_name + "_residuals.fits"):
         hdul = fits.open(data_dir + instrument + "_" + planet_name + "_residuals.fits")
         if "pynpoint" in data_dir or "andromeda" in data_dir:
+            # For some reason the files are saved to different HDU indices.
             dataind = 0
         else:
             dataind = 1
@@ -286,7 +291,7 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
         return cor,cov
 
 
-def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
+def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = True):
     # load in full residual file
     # use annulus far from center
     # get std of each aperture in contrast units
@@ -309,13 +314,13 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
     r_out = loc/1000/pxscale + width
     annulus_c = CircularAnnulus(center,r_in = r_in, r_out = r_out)
     model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_" + instrument.upper() + "_fullfit_10pc.dat").T
-    #model *= (41.2925/10.0)**2
     if flux_cal:
-        stellar_model = model[1]
+        stellar_model = model[1]*(distance/10.0)**2
     else:
         stellar_model = np.ones_like(model[1])
     # Get stellar PSF
     # Must be at least 30 px wide (for background error)
+    # TODO SHOULD THIS BE DONE IN MAGNITUDES!?!?!?
     if instrument.lower() == "sphereyj":
         psf_name = "../psf_satellites_calibrated.fits"
         try:
@@ -328,7 +333,9 @@ def uncorrelated_error(residuals,spectrum,nl,npca=None,flux_cal = False):
         psf_name = "../psf_cube.fits"
         psf_cube = fits.open(glob.glob(data_dir + psf_name)[0])[0].data * DIT_SCIENCE/DIT_FLUX
         nFrames = 1
+
     elif "gpi" in instrument.lower():
+        stellar_model = stellar_model
         psf_name = glob.glob(data_dir + "../*_PSF_cube.fits")[0]
         psf_hdul = fits.open(psf_name)
         psf = psf_hdul[0].data
