@@ -131,7 +131,7 @@ def main(args):
         # Get full frame residuals. Not strictly correct, but should be ok
         KLIP_fulframe(dataset, PSF_cube, posn, numthreads)
     else:
-        exspect = np.load(data_dir + "/pyklip/exspect.npy")
+        exspect = np.load(data_dir + "pyklip/" + instrument + "_" + planet_name + "exspect.npy")
     # Generate nice outputs
     combine_residuals()
 
@@ -465,7 +465,9 @@ def mcmc_scaling(dataset,PSF_cube,posn,exspect,spot_to_star_ratio,stellar_model)
 
 def combine_residuals():
     print("Combining residuals into fits file.")
-    files = sorted(glob.glob(data_dir + "pyklip/fullframe*"))
+    print(instrument, planet_name)
+    files = sorted(glob.glob(data_dir + "pyklip/"+instrument + "_" + planet_name +"_fullframe*"))
+    print(files)
     hduls = []
     hdu0 = fits.PrimaryHDU()
     hdul = fits.open(files[0])

@@ -161,7 +161,8 @@ def main(args):
     posn_pyn = (CENTER[0]+x_pix,CENTER[1]+y_pix)
     print(CENTER,posn,posn_old,posn_pyn,x_pix,y_pix)
     #posn_pyn=posn
-    #if "gpi"in instrument.lower():
+    if "gpi"in instrument.lower():
+        posn_pyn=posn_old
     #    new_cent = (np.mean(dataset.centers[:,0]),np.mean(dataset.centers[:,1]))
     #    posn_pyn = (new_cent[0]+x_pix,new_cent[1]+y_pix) # Keeping this the old way for now just in case
     # Sanity chec the posn
@@ -523,7 +524,8 @@ def preproc_files(skip = False):
 
     elif "gpi" in instrument.lower():
         science_name = "*distorcorr.fits"
-        psf_name = glob.glob(data_dir + "*-original_PSF_cube.fits")[0]
+        psf_name = glob.glob(data_dir + "*_PSF_cube.fits")[0]
+        #psf_name = glob.glob(data_dir + "*-original_PSF_cube.fits")[0]
         psf_hdul = fits.open(psf_name)
         psfs = psf_hdul[0].data
 
@@ -532,13 +534,13 @@ def preproc_files(skip = False):
         filelist = sorted(glob.glob(data_dir +science_name))
         dataset = GPI.GPIData(filelist, highpass=True, PSF_cube = psfs,recalc_centers=True)
         dataset.generate_psf_cube(41)
-
+        psfs = dataset.psfs
         pcas[pcas>=len(filelist)] = len(filelist)-1
         pcas = np.unique(pcas).tolist()
 
         band = dataset.prihdrs[0]['APODIZER'].split('_')[1]
         spot_to_star_ratio = dataset.spot_ratio[band]
-        NORMFACTOR = spot_to_star_ratio
+        NORMFACTOR = 1/spot_to_star_ratio
 
         CENTER = (np.mean(dataset.centers[:,0]),np.mean(dataset.centers[:,1]))
 

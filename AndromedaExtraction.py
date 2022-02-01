@@ -186,7 +186,9 @@ def init():
     elif "gpi" in instrument.lower():
         pixscale =  0.014161
         science_name = "*distorcorr.fits"
-        psf_name = glob.glob(data_dir + "*-original_PSF_cube.fits")[0]
+        #psf_name = glob.glob(data_dir + "*-original_PSF_cube.fits")[0]
+        psf_name = glob.glob(data_dir + "*_PSF_cube.fits")[0]
+
         psf_hdul = fits.open(psf_name)
         psfs = psf_hdul[0].data
 
@@ -354,38 +356,46 @@ def run_andromeda(data,angles,wlen,psfs):
     hdu = fits.PrimaryHDU(contrasts)
     hdul_new = fits.HDUList([hdu])
     hdul_new.writeto(output_dir + instrument+ "_"+ planet_name + "_residuals.fits",overwrite=True)
-
     hdu = fits.PrimaryHDU(c_norms)
     hdul_new = fits.HDUList([hdu])
     hdul_new.writeto(output_dir + instrument+ "_"+ planet_name + "_normed.fits",overwrite=True)
     hdu = fits.PrimaryHDU(snrs)
     hdul_new = fits.HDUList([hdu])
     hdul_new.writeto(output_dir + instrument+ "_"+ planet_name + "_snrs.fits",overwrite=True)
+    hdu = fits.PrimaryHDU(stds)
+    hdul_new = fits.HDUList([hdu])
+    hdul_new.writeto(output_dir + instrument+ "_"+ planet_name + "_stds.fits",overwrite=True)
 
     return contrasts, snrs, stds
 
 def aperture_phot_extract(contrasts,stds,psfs,wlen,posn):
     mask = create_circular_mask(contrasts.shape[1],contrasts.shape[2],
                             center = posn,
-                            radius = 3)
-    aperture = CircularAperture([posn], r=3)
+                            radius = 5.0)
+    aperture = CircularAperture([posn], r=5.0)
 
     #Contrast
     spectrum = []
-    #fit_spec = []
+    fit_spec = []
+    peak_spec = []
+
     for i,frame in enumerate(contrasts):
         set_fwhm(psfs,i)
         phot_table = aperture_photometry(frame,aperture)
         spectrum.append(phot_table['aperture_sum'][0])
-        flux_fit = vip.var.fit_2dgaussian(frame, crop=True, cropsize=9,
-                                          cent = posn, fwhmx = fwhm,
+        flux_fit = vip.var.fit_2dgaussian(frame, crop=True, cropsize=15,
+                                          cent = (posn[1],posn[0]), fwhmx = fwhm,
                                           fwhmy = fwhm, debug=False,
                                           full_output=True)
-        #fit_spec.append(np.array([flux_fit['amplitude'],flux_fit['centroid_x'],flux_fit['centroid_y']]))
-    #fit_spec = np.array(fit_spec)
+        fit_spec.append(flux_fit['amplitude'])
+        peak_spec.append(np.nanmax(frame[int(posn[1])-8:int(posn[1])+8,int(posn[0])-8:int(posn[0])+8]))
+
+    fit_spec = np.array(fit_spec)
     spectrum = np.array(spectrum)
+    peak_spec = np.array(peak_spec)
     np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_contrast",spectrum)
-    #np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_fit_contrast",fit_spec)
+    np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_fit_contrast",fit_spec)
+    np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_peak_contrast",peak_spec)
 
     # Error
     errs = []
@@ -443,16 +453,18 @@ def guess_flux(cube,posn,wlen,angles,psfs):
     fs = np.array(fs)
     np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_astrometry",np.array([rs,ts,fs]))
 
-def mcmc_flux(snrs,rs,ts,fs):
+def mcmc_flux(contrast,psfs,rs,ts,fs):
     nwalkers, itermin, itermax = (100, 200, 500)
     maxs = [],
     confs = []
-    for i,frame in enumerate(snrs):
+
+    for i,frame in enumerate(contrast):
         init = np.array([rs[i],ts[i],fs[i]]) #r,theta,flux
-        psf = np.median(psf[i],axis=0)
+        psf = psfs[i]
+        psf = vip.metrics.normalize_psf(psf, fwhm, size=11)
         chain = mcmc_negfc_sampling(frame, angles, psf, ncomp=30, plsc=pixscale/1000,
                                     fwhm=fwhm, svd_mode='lapack', annulus_width=3,
-                                    aperture_radius=3, initial_state=init, nwalkers=nwalkers,
+                                    aperture_radius=4.0, initial_state=init, nwalkers=nwalkers,
                                     bounds=None, niteration_min=itermin, rhat_count_threshold=1,
                                     niteration_limit=itermax, check_maxgap=50, nproc=numthreads,
                                     display=False, verbosity=1, save=False)
