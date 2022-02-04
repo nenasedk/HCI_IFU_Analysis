@@ -141,16 +141,16 @@ def main(args):
     # This is a comnbination of residual error far from the star, and photometric error on the stellar psf
     # Both real units and fractional error are returned
     total_err,frac_err,_,_ = uncorrelated_error(residuals,spectrum,nl,npca,flux_cal=True)
-    #cont_err,frac_cont_err,_,_ = uncorrelated_error(residuals,contrasts,nl,npca)
+    cont_err,frac_cont_err,_,_ = uncorrelated_error(residuals,contrasts,nl,npca,flux_cal=False)
     # Now we can compute the correlation and covariance matrices
     # The covariance matrix is normalised so that sqrt(diag(cov)) = uncorrelated error
     cor,cov = get_covariance(residuals,total_err,posn_dict,nl,npca)
-    #cor_cont,cov_cont = get_covariance(residuals,cont_err,posn_dict,nl,npca)
+    cor_cont,cov_cont = get_covariance(residuals,cont_err,posn_dict,nl,npca)
 
     print("Done!")
 
     # All of the outputs get combined and saved to a fits file
-    fits_output(spectrum,cov,cor, pcas=pcas)#, contrast = contrasts, cont_cov = cov_cont)
+    fits_output(spectrum,cov,cor, pcas=pcas, contrast = contrasts, cont_cov = cov_cont)
     return
 
 def create_circular_mask(h, w, center=None, radius=None):

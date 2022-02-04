@@ -34,8 +34,8 @@ from Astrometry import get_astrometry, read_astrometry
 #rc('text', usetex=True)
 
 ### KLIP Parameters ###
-numbasis = np.array([3,4,5,8,10,12,15]) # "k_klip", this can be a list of any size.
-maxnumbasis = 20 # Max components to be calculated
+numbasis = np.array([5,10,12,15,18,20,25]) # "k_klip", this can be a list of any size.
+maxnumbasis = 25 # Max components to be calculated
 movement = 2.0 # aggressiveness for choosing reference library
 stamp_size = 9 # how big of a stamp around the companion in pixels
                 # stamp will be stamp_size**2 pixels
@@ -168,7 +168,6 @@ def init_sphere():
                          psf_cube_size = 15)
     print("read in data")
     dataset.input = np.nan_to_num(dataset.input)
-
     return dataset
 
 def init_gpi():
@@ -193,12 +192,12 @@ def init_gpi():
     return dataset
 
 def init_psfs(dataset):
-
+    global maxnumbasis
     # useful constants
     N_frames = len(dataset.input)
     N_cubes = np.size(np.unique(dataset.filenums))
     nl = N_frames // N_cubes
-
+    maxnumbasis = N_cubes
     # The units of your model PSF are important, the return spectrum will be
     # relative to the input PSF model, see next example
     # generate_psf_cube has better background subtraction than generate_psfs

@@ -110,8 +110,8 @@ def main(args):
     # Setup directories
     if not data_dir.endswith("/"):
         data_dir += "/"
-    if not os.path.isdir(data_dir + "pynpoint/"):
-        os.makedirs(data_dir + "pynpoint", exist_ok=True)
+    if not os.path.isdir(data_dir + "pynpoint_"+planet_name + "/"):
+        os.makedirs(data_dir + "pynpoint_"+planet_name, exist_ok=True)
 
     # Instrument parameters
     if "sphere" in instrument.lower():
@@ -176,7 +176,7 @@ def main(args):
     # Save outputs to numpy arrays
     contrasts = save_contrasts(nChannels,
                             base_name,
-                            data_dir + "pynpoint/",
+                            data_dir + "pynpoint_"+planet_name + "/",
                             instrument + "_" + planet_name)
 
     # Use stellar model to convert to flux units
@@ -195,7 +195,7 @@ def test_analysis(input_name,psf_name,output_name,posn,working_dir,waffle = Fals
     #set_fwhm(0)
     test_pipeline = Pypeline(working_place_in=working_dir,
                         input_place_in=data_dir,
-                        output_place_in=data_dir + "pynpoint/")
+                        output_place_in=data_dir + "pynpoint_"+planet_name + "/")
 
     module = FitsReadingModule(name_in="read_science",
                                input_dir=data_dir,
@@ -243,14 +243,14 @@ def test_analysis(input_name,psf_name,output_name,posn,working_dir,waffle = Fals
     test_pipeline.add_module(module)
     test_pipeline.run()
     residuals = test_pipeline.get_data("median")
-    save_residuals(residuals,output_name +"_residuals_ADISDI", data_dir+ "pynpoint/" )
+    save_residuals(residuals,output_name +"_residuals_ADISDI", data_dir+ "pynpoint_"+planet_name + "/" )
 
 # Run Simplex minimization on a single channel to get the contrast
 def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir):
     #set_fwhm(channel)
     pipeline = Pypeline(working_place_in=working_dir,
                         input_place_in=data_dir,
-                        output_place_in=data_dir + "pynpoint/")
+                        output_place_in=data_dir + "pynpoint_"+planet_name + "/")
 
     module = FitsReadingModule(name_in="read_science",
                                input_dir=data_dir,
@@ -301,8 +301,8 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
     module = SimplexMinimizationModule(name_in = 'simplex',
                                        image_in_tag = 'science_bad',
                                        psf_in_tag = 'psf',
-                                       res_out_tag = 'flux_channel_' + channel+"_",
-                                       flux_position_tag = 'flux_pos_channel_' + channel +"_",
+                                       res_out_tag = planet_name + '_flux_channel_' + channel+"_",
+                                       flux_position_tag = planet_name + '_flux_pos_channel_' + channel +"_",
                                        position = posn,
                                        magnitude = 14.0, # approximate planet contrast in mag
                                        psf_scaling = -1*NORMFACTOR, # deal with spectrum mormalization later
@@ -316,10 +316,10 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
     pipeline.add_module(module)
     pipeline.run()
     for pca in pcas:
-        flux = pipeline.get_data('flux_pos_channel_' + str(channel).zfill(3) + "_" + str(pca).zfill(3))
-        np.savetxt(data_dir+ "pynpoint/" + output_name + "_ch" + str(channel).zfill(3) +"_flux_pos_out_pca_" +str(pca)+ ".dat",flux)
-        residuals = pipeline.get_data('flux_channel_' + str(channel).zfill(3) + "_" + str(pca).zfill(3))
-        save_residuals(residuals[-1],output_name +"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca), data_dir+ "pynpoint/" )
+        flux = pipeline.get_data(planet_name + '_flux_pos_channel_' + str(channel).zfill(3) + "_" + str(pca).zfill(3))
+        np.savetxt(data_dir+ "pynpoint_"+planet_name + "/" + output_name + "_ch" + str(channel).zfill(3) +"_flux_pos_out_pca_" +str(pca)+ ".dat",flux)
+        residuals = pipeline.get_data(planet_name + '_flux_channel_' + str(channel).zfill(3) + "_" + str(pca).zfill(3))
+        save_residuals(residuals[-1],output_name +"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca), data_dir+ "pynpoint_"+planet_name + "/" )
 
 # Run Pynpoint
 def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
@@ -335,11 +335,11 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
 
     # Loop over all channels
     for channel in range(nChannels):
-        working_dir = data_dir + "pynpoint/CH" + str(channel).zfill(3) +"/"
+        working_dir = data_dir + "pynpoint_"+planet_name + "/CH" + str(channel).zfill(3) +"/"
 
         # Allow us to resume if some channels have already been calculated
         if skip:
-            pcafiles = sorted(glob.glob(data_dir + "pynpoint/" +output_name +"_residuals_" + str(channel).zfill(3) + "_pca_*.fits"))
+            pcafiles = sorted(glob.glob(data_dir + "pynpoint_"+planet_name + "/" +output_name +"_residuals_" + str(channel).zfill(3) + "_pca_*.fits"))
             if len(pcafiles) > 0:
                 continue
         # Have to copy the config file to the working dir
@@ -357,7 +357,7 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
         # Better option would be using fits headers, but that's a pain.
         name = base_name +"_" + str(channel).zfill(3) + '_reduced.fits'
         psf_name = base_name +"_" + str(channel).zfill(3) + '_PSF.fits'
-        output_place = data_dir+"pynpoint/"
+        output_place = data_dir+"pynpoint_"+planet_name + "/"
         if os.path.isfile(working_dir + "PynPoint_database.hdf5"):
             os.remove(working_dir + "PynPoint_database.hdf5")
 
@@ -375,7 +375,7 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
         rpcas = []
         contrast = []
         for channel in range(nChannels):
-            hdul = fits.open(data_dir + "pynpoint/"+output_name+"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca)+".fits")
+            hdul = fits.open(data_dir + "pynpoint_"+planet_name + "/"+output_name+"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca)+".fits")
             data = hdul[0].data
             rpcas.append(data)
             contrast.append(10.0**(data/2.5))
@@ -390,13 +390,13 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
     # Write residuals in magnitude units
     hdu = fits.PrimaryHDU(residuals)
     hdul = fits.HDUList([hdu])
-    hdul.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_magnitudes.fits',
+    hdul.writeto(data_dir+"pynpoint_"+planet_name + "/" + instrument+ "_"+ planet_name + '_magnitudes.fits',
                  overwrite=True,checksum=True,output_verify='exception')
 
     # Write contrast in contrast units (surprise)
     hdu = fits.PrimaryHDU(contrasts)
     hdul = fits.HDUList([hdu])
-    hdul.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_residuals.fits',
+    hdul.writeto(data_dir+"pynpoint_"+planet_name + "/" + instrument+ "_"+ planet_name + '_residuals.fits',
                  overwrite=True,checksum=True,output_verify='exception')
 
 """def combine_residuals(output_name, nChannels):
@@ -417,7 +417,7 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
         rpcas = []
         contrast = []
         for channel in range(nChannels):
-            hdul = fits.open(data_dir + "pynpoint/"+output_name+"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca)+".fits")
+            hdul = fits.open(data_dir + "pynpoint_"+planet_name + "/"+output_name+"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca)+".fits")
             data = hdul[0].data
             rpcas.append(data)
             contrast.append(10.0**(data/2.5)) # WHY IS 2.5 NOT NEGATIVE!?!? (Maybe because the PSF is negative in simplex?? Contrast vs an actual magnitude.)
@@ -433,9 +433,9 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
     hdul_c = fits.HDUList(hduls_c)
     hdul_m = fits.HDUList(hduls_m)
 
-    hdul_c.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_residuals.fits',
+    hdul_c.writeto(data_dir+"pynpoint_"+planet_name + "/" + instrument+ "_"+ planet_name + '_residuals.fits',
                    overwrite=True, checksum=True, output_verify='fix')
-    hdul_m.writeto(data_dir+"pynpoint/" + instrument+ "_"+ planet_name + '_magnitudes.fits',
+    hdul_m.writeto(data_dir+"pynpoint_"+planet_name + "/" + instrument+ "_"+ planet_name + '_magnitudes.fits',
                    overwrite=True, checksum=True, output_verify='fix')"""
 
 # Save contrasts to a useable array
@@ -446,7 +446,7 @@ def save_contrasts(nChannels,base_name,output_place,output_name):
     for pca in pcas:
         contrast = []
         for channel in range(nChannels):
-            samples = np.genfromtxt(data_dir + "pynpoint/"+ output_name + "_ch" + str(channel).zfill(3) +"_flux_pos_out_pca_" +str(pca)+ ".dat")
+            samples = np.genfromtxt(data_dir + "pynpoint_"+planet_name + "/"+ output_name + "_ch" + str(channel).zfill(3) +"_flux_pos_out_pca_" +str(pca)+ ".dat")
             samples = 10**(samples/-2.5)
             contrast.append(samples[-1][4])
         contrasts.append(contrast)
@@ -463,7 +463,7 @@ def save_flux(contrasts):
     for i in range(len(pcas)):
         fluxes.append(stellar_model[1]*contrasts[i]*(distance/10.)**2)
     fluxes = np.array(fluxes)
-    np.save(data_dir + "pynpoint/" + instrument + "_" + planet_name + "_flux_10pc_7200K",fluxes) # Saved in W/m2/micron at 10pc
+    np.save(data_dir + "pynpoint_"+planet_name + "/" + instrument + "_" + planet_name + "_flux_10pc_7200K",fluxes) # Saved in W/m2/micron at 10pc
 
 # Reshape science and PSF files for PCA,
 def preproc_files(skip = False):
