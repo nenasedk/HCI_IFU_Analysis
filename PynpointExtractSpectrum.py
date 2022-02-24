@@ -320,6 +320,7 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
         np.savetxt(data_dir+ "pynpoint_"+planet_name + "/" + output_name + "_ch" + str(channel).zfill(3) +"_flux_pos_out_pca_" +str(pca)+ ".dat",flux)
         residuals = pipeline.get_data(planet_name + '_flux_channel_' + str(channel).zfill(3) + "_" + str(pca).zfill(3))
         save_residuals(residuals[-1],output_name +"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca), data_dir+ "pynpoint_"+planet_name + "/" )
+    os.remove(working_dir + "PynPoint_database.hdf5")
 
 # Run Pynpoint
 def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
@@ -340,7 +341,7 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
         # Allow us to resume if some channels have already been calculated
         if skip:
             pcafiles = sorted(glob.glob(data_dir + "pynpoint_"+planet_name + "/" +output_name +"_residuals_" + str(channel).zfill(3) + "_pca_*.fits"))
-            if len(pcafiles) > 0:
+            if len(pcafiles) == len(pcas):
                 continue
         # Have to copy the config file to the working dir
         # Using separate dirs to get unique databases for each wavelength
@@ -399,44 +400,6 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
     hdul.writeto(data_dir+"pynpoint_"+planet_name + "/" + instrument+ "_"+ planet_name + '_residuals.fits',
                  overwrite=True,checksum=True,output_verify='exception')
 
-"""def combine_residuals(output_name, nChannels):
-    print("Combining residuals into fits file.")
-    hduls_c= []
-    hduls_m= []
-
-    hdr_file = sorted(glob.glob(data_dir +"*rames_removed.fits"))[0]
-    hdr_hdul = fits.open(hdr_file)
-    hdu0 = fits.PrimaryHDU([])
-    hdu0.header = hdr_hdul[0].header
-    hdr_hdul.close()
-
-    hduls_c.append(hdu0)
-    hduls_m.append(hdu0)
-
-    for pca in pcas:
-        rpcas = []
-        contrast = []
-        for channel in range(nChannels):
-            hdul = fits.open(data_dir + "pynpoint_"+planet_name + "/"+output_name+"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca)+".fits")
-            data = hdul[0].data
-            rpcas.append(data)
-            contrast.append(10.0**(data/2.5)) # WHY IS 2.5 NOT NEGATIVE!?!? (Maybe because the PSF is negative in simplex?? Contrast vs an actual magnitude.)
-            hdul.close()
-        rpcas = np.array(rpcas)
-        contrast = np.array(contrast)
-
-        hdu = fits.ImageHDU(contrast,name = str(pca)+"PC")
-        hdu_2 = fits.ImageHDU(rpcas,name = str(pca)+"PC")
-        hduls_c.append(hdu)
-        hduls_m.append(hdu_2)
-
-    hdul_c = fits.HDUList(hduls_c)
-    hdul_m = fits.HDUList(hduls_m)
-
-    hdul_c.writeto(data_dir+"pynpoint_"+planet_name + "/" + instrument+ "_"+ planet_name + '_residuals.fits',
-                   overwrite=True, checksum=True, output_verify='fix')
-    hdul_m.writeto(data_dir+"pynpoint_"+planet_name + "/" + instrument+ "_"+ planet_name + '_magnitudes.fits',
-                   overwrite=True, checksum=True, output_verify='fix')"""
 
 # Save contrasts to a useable array
 def save_contrasts(nChannels,base_name,output_place,output_name):

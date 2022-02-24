@@ -130,7 +130,7 @@ def main(args):
         if "pynpoint" in data_dir:
             pcas = [2,4,5,6,7,8,9,10,12,15,18]
         elif "pyklip" in data_dir:
-            pcas = [3,4,5,8,10,12,15]
+            pcas = [2,3,4,5,6,8,10,12,15,18,20,25]
 
     else:
         npca = None
@@ -209,7 +209,7 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
                 flux = annulus.multiply(mask*med)[annulus.data>0]
                 #print(flux)
                 fluxes.append(flux)
-                if i==25 and j==4:
+                if i==36 and j==4:
                     fig,ax = plt.subplots(ncols = 2, figsize=(16,8))
                     ax = ax.flatten()
                     im0 = ax[0].imshow(med)

@@ -34,7 +34,7 @@ from Astrometry import get_astrometry, read_astrometry
 #rc('text', usetex=True)
 
 ### KLIP Parameters ###
-numbasis = np.array([5,10,12,15,18,20,25]) # "k_klip", this can be a list of any size.
+numbasis = np.array([2,3,4,5,6,8,10]) # "k_klip", this can be a list of any size.
 maxnumbasis = 25 # Max components to be calculated
 movement = 2.0 # aggressiveness for choosing reference library
 stamp_size = 9 # how big of a stamp around the companion in pixels
@@ -130,7 +130,11 @@ def main(args):
         contrasts,flux = get_spectrum(dataset, exspect,spot_to_star_ratio, stellar_model)
         # Get full frame residuals. Not strictly correct, but should be ok
         KLIP_fulframe(dataset, PSF_cube, posn, numthreads)
+
     else:
+        files = sorted(glob.glob(data_dir + "pyklip/"+instrument + "_" + planet_name +"_fullframe*"))
+        if len(files) == 0:
+            KLIP_fulframe(dataset, PSF_cube, posn, numthreads)
         exspect = np.load(data_dir + "pyklip/" + instrument + "_" + planet_name + "exspect.npy")
     # Generate nice outputs
     combine_residuals()
@@ -349,7 +353,7 @@ def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
     planet_sep, planet_pa = posn
     planet_sep =planet_sep/1000 / pxscale
     ###### The forward model class ######
-    fm_class = es.ExtractSpec(dataset.input.shape,
+    """fm_class = es.ExtractSpec(dataset.input.shape,
                         numbasis,
                         planet_sep,
                         planet_pa,
@@ -374,7 +378,24 @@ def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
                     highpass=True,
                     calibrate_flux=True,
                     outputdir=data_dir + "pyklip/",
-                    mute_progression=True)
+                    mute_progression=True)"""
+    parallelized.klip_dataset(dataset,
+                mode='ADI',
+                fileprefix=instrument + "_" + planet_name +"_fullframe",
+                annuli=12,
+                subsections=10,
+                movement=movement,
+                #flux_overlap = 0.1,
+                numbasis = numbasis,
+                maxnumbasis=maxnumbasis,
+                numthreads=numthreads,
+                spectrum=None,
+                #time_collapse = 'weighted-mean',
+                #save_klipped=True,
+                algo='klip',
+                highpass=True,
+                calibrate_flux=True,
+                outputdir=data_dir + "pyklip/")
     return
 
 def recover_fake(dataset, PSF_cube, files, position, fake_flux, kklip):
@@ -478,8 +499,17 @@ def combine_residuals():
         dataind = 0 # For some reason the outputs for the fm are different
     elif "gpi" in instrument.lower():
         dataind = 1
-    for i,f in enumerate(files):
+    i = 0
+    for f in files:
         if "KLmodes" in f:
+            continue
+        pca = 0
+        try:
+            pca = int(f.split("-KL")[-1].split("-")[0])
+        except TypeError:
+            continue
+
+        if not pca in numbasis:
             continue
         hdul = fits.open(f)
         data = hdul[dataind].data
@@ -487,7 +517,7 @@ def combine_residuals():
         hdu.header = hdul[dataind].header
         hduls.append(hdu)
         hdul.close()
-
+        i+=1
     hdul = fits.HDUList(hduls)
     hdul.writeto(data_dir+"pyklip/" + instrument+ "_"+ planet_name + '_residuals.fits',
                  overwrite=True, checksum=True, output_verify='fix')

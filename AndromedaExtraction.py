@@ -171,6 +171,28 @@ def init():
         ang_hdul = fits.open(data_dir + parang_name)
         angles = ang_hdul[0].data
         ang_hdul.close()
+        if "ESO" in data_dir:
+            #Not sure how to do this better,
+            #Doesn't seem to be centering info in the header
+            # Maybe do a gauss fit? But the central PSF changes w wlen a lot.
+            CENTER = (145.0,143.)
+            angles = angles + 90.0 - 1.75
+            science_pyn = []
+
+            # RECENTER ESO DATA
+            for channel,frame in enumerate(science[:]):
+                frame = frame[:,:-1,:-1]
+                shiftx,shifty = (int((frame.shape[-2]/2.)) - CENTER[0]-0.5,
+                                (int(frame.shape[-1]/2.)) - CENTER[1]-0.5)
+                shifted = vip.preproc.recentering.cube_shift(frame,shifty,shiftx)[:,:-1,:-1]
+                # Save for a full file, not channel by channel
+                science_pyn.append(shifted)
+            science = np.array(science_pyn)
+            CENTER = (science.shape[-2]/2.0,science.shape[-1]/2.0)
+
+        # Save the full file (wlens,nframes,x,y)
+        science_pyn = np.array(science_pyn)
+        science = science_pyn
         # Wavelength
         wvs_hdul = fits.open(data_dir + wlen_name)
         wlen = wvs_hdul[0].data
@@ -178,9 +200,8 @@ def init():
         # PSF Data
         psf_hdul = fits.open(data_dir + psf_name)
         psfs = psf_hdul[0].data
-        print(psfs.shape)
-        psfs = psfs[:, int(255/2 - 20):int(255/2 + 20),int(255/2 - 20):int(255/2 + 20)]
-        print(psfs.shape)
+        psfwidth = psfs.shape[-1]/2
+        psfs = psfs[:, int(psfwidth - 20):int(psfwidth + 20),int(psfwidth - 20):int(psfwidth + 20)]
         psf_hdul.close()
 
     elif "gpi" in instrument.lower():
@@ -264,11 +285,11 @@ def set_fwhm(psfs,channel):
 def run_andromeda(data,angles,wlen,psfs):
     global pixscale
     if "sphere" in instrument.lower():
-        diam_tel = 8.3                                            # Telescope diameter [m]
+        diam_tel = 8.2                                            # Telescope diameter [m]
         pixscale = 7.46                                           # Pixscale [mas/px]
     else:
         diam_tel = 10.                                             # Telescope diameter [m]
-        pixscale =  0.014161 *1000                                 # Pixscale [mas/px]
+        pixscale =  14.161                                         # Pixscale [mas/px]
     #PIXSCALE_NYQUIST = (1/2.*np.mean(wlen)*1e-6/diam_tel)/np.pi*180*3600*1e3 # Pixscale at Shannon [mas/px]
     #oversampling = PIXSCALE_NYQUIST /  pixscale                # Oversampling factor [1]
     contrasts = []
