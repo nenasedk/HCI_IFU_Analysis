@@ -34,7 +34,7 @@ from Astrometry import get_astrometry, read_astrometry
 #rc('text', usetex=True)
 
 ### KLIP Parameters ###
-numbasis = np.array([2,3,4,5,6,8,10]) # "k_klip", this can be a list of any size.
+numbasis = np.array([2,3,4,5,6,8,10,12,15,18,20,25]) # "k_klip", this can be a list of any size.
 maxnumbasis = 25 # Max components to be calculated
 movement = 2.0 # aggressiveness for choosing reference library
 stamp_size = 9 # how big of a stamp around the companion in pixels
@@ -210,7 +210,7 @@ def init_psfs(dataset):
     if "K" in instrument:
         dataset.generate_psfs(11)
     else:
-        dataset.generate_psf_cube(21)
+        dataset.generate_psf_cube(17)
     # NOTE: not using pretty much all of the example calibration
     PSF_cube = dataset.psfs
     model_psf_sum = np.nansum(PSF_cube, axis=(1,2))
@@ -243,7 +243,7 @@ def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
     ###### The forward model class ######
     # WATCH OUT FOR MEMORY ISSUES HERE
     # If the PSF size, input size or numbasis size is too large, will cause issues on cluster
-    dtype = "double"
+    dtype = "float"
     if "sphere" in instrument.lower():
         dtype = "float"
     fm_class = es.ExtractSpec(dataset.input.shape,
@@ -337,13 +337,13 @@ def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
 
     # Save the data
     np.save(data_dir +"pyklip/" + instrument + "_" + planet_name + "_contrasts",
-            exspect*spot_to_star_ratio*(DIT_FLUX/DIT_SCIENCE))
+            exspect*spot_to_star_ratio*(DIT_SCIENCE/DIT_FLUX))
     np.save(data_dir +"pyklip/"+ instrument + "_" + planet_name + "_flux_10pc_7200K",
-            exspect*spot_to_star_ratio*sm*((distance/10.)**2)*(DIT_FLUX/DIT_SCIENCE))
+            exspect*spot_to_star_ratio*sm*((distance/10.)**2)*(DIT_SCIENCE/DIT_FLUX))
     np.save(data_dir +"pyklip/"+ instrument + "_" + planet_name + "spot_to_star_ratio",spot_to_star_ratio)
 
     # Contrast, Flux Density (W/m^2/micron)
-    return exspect*spot_to_star_ratio*(DIT_FLUX/DIT_SCIENCE),exspect*spot_to_star_ratio*sm*(distance/10.)**2*(DIT_FLUX/DIT_SCIENCE)
+    return exspect*spot_to_star_ratio*(DIT_SCIENCE/DIT_FLUX),exspect*spot_to_star_ratio*sm*(distance/10.)**2*(DIT_SCIENCE/DIT_FLUX)
 
 
 def KLIP_fulframe(dataset, PSF_cube, posn, numthreads):
@@ -481,13 +481,12 @@ def mcmc_scaling(dataset,PSF_cube,posn,exspect,spot_to_star_ratio,stellar_model)
     scaling = np.array(scaling)
     sm = stellar_model[1]
     np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "_mcmc_scale_factor",scaling)
-    np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "_scaled_spectrum",np.mean(scaling,axis=0)*exspect*spot_to_star_ratio*(DIT_FLUX/DIT_SCIENCE)*sm*(distance/10.)**2)
+    np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "_scaled_spectrum",np.mean(scaling,axis=0)*exspect*spot_to_star_ratio*(DIT_SCIENCE/DIT_FLUX)*sm*(distance/10.)**2)
 
 def combine_residuals():
     print("Combining residuals into fits file.")
     print(instrument, planet_name)
-    files = sorted(glob.glob(data_dir + "pyklip/"+instrument + "_" + planet_name +"_fullframe*"))
-    print(files)
+    files = glob.glob(data_dir + "pyklip/"+instrument + "_" + planet_name +"_fullframe-KL*")
     hduls = []
     hdu0 = fits.PrimaryHDU()
     hdul = fits.open(files[0])
@@ -495,6 +494,7 @@ def combine_residuals():
     hdul.close()
 
     hduls.append(hdu0)
+    sortlist = [0]
     if "sphere" in instrument.lower():
         dataind = 0 # For some reason the outputs for the fm are different
     elif "gpi" in instrument.lower():
@@ -508,17 +508,19 @@ def combine_residuals():
             pca = int(f.split("-KL")[-1].split("-")[0])
         except TypeError:
             continue
-
         if not pca in numbasis:
             continue
+        sortlist.append(pca)
         hdul = fits.open(f)
         data = hdul[dataind].data
-        hdu = fits.ImageHDU(data,name = str(numbasis[i])+"PC")
+        hdu = fits.ImageHDU(data,name = str(pca)+"PC")
         hdu.header = hdul[dataind].header
         hduls.append(hdu)
         hdul.close()
         i+=1
-    hdul = fits.HDUList(hduls)
+    print(sortlist)
+    sorted_inds_by_pca = np.argsort(np.array(sortlist))
+    hdul = fits.HDUList([hduls[sorted_ind] for sorted_ind in sorted_inds_by_pca])
     hdul.writeto(data_dir+"pyklip/" + instrument+ "_"+ planet_name + '_residuals.fits',
                  overwrite=True, checksum=True, output_verify='fix')
 
