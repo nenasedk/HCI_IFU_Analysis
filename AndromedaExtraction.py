@@ -27,8 +27,8 @@ import pyklip.instruments.GPI as GPI
 import vip_hci as vip
 from hciplot import plot_frames, plot_cubes
 from vip_hci.preproc import cube_recenter_2dfit, cube_recenter_dft_upsampling, cube_shift, cube_crop_frames
-from vip_hci.negfc import firstguess, mcmc_negfc_sampling, show_corner_plot, show_walk_plot,confidence
-from vip_hci.andromeda import andromeda
+from vip_hci.fm.negfc_simplex import firstguess_simplex#, show_corner_plot, show_walk_plot,confidence
+from vip_hci.invprob.andromeda import andromeda
 
 from Astrometry import get_astrometry, read_astrometry, init_sphere, init_gpi, init_psfs
 
@@ -128,12 +128,12 @@ def main(args):
 def even_shape(data):
     if not (data.shape[-1])%2 == 0:
         if len(data.shape) == 3:
-            cube = cube_shift(data[:,:-1,:-1],-0.5,-0.5)
+            cube = cube_shift(np.nan_to_num(data[:,:-1,:-1]),-0.5,-0.5)
             return cube
         else:
             stack = []
             for entry in data:
-                stack.append(cube_shift(entry[:,:-1,:-1],-0.5,-0.5))
+                stack.append(cube_shift(np.nan_to_num(entry[:,:-1,:-1]),-0.5,-0.5))
             return np.array(stack)
     else:
         return data
@@ -171,6 +171,7 @@ def init():
         ang_hdul = fits.open(data_dir + parang_name)
         angles = ang_hdul[0].data
         ang_hdul.close()
+
         if "ESO" in data_dir:
             #Not sure how to do this better,
             #Doesn't seem to be centering info in the header
@@ -190,9 +191,10 @@ def init():
             science = np.array(science_pyn)
             CENTER = (science.shape[-2]/2.0,science.shape[-1]/2.0)
 
-        # Save the full file (wlens,nframes,x,y)
-        science_pyn = np.array(science_pyn)
-        science = science_pyn
+            # Save the full file (wlens,nframes,x,y)
+            science_pyn = np.array(science_pyn)
+            science = science_pyn
+
         # Wavelength
         wvs_hdul = fits.open(data_dir + wlen_name)
         wlen = wvs_hdul[0].data
@@ -237,7 +239,7 @@ def init():
             centy = dataset.centers.reshape(len(filelist),37,2)[:,channel,1]
             shiftx,shifty = (int((frame.shape[-2]/2.))*np.ones_like(centx) - centx,
                              (int(frame.shape[-1]/2.))*np.ones_like(centy) - centy)
-            shifted = vip.preproc.recentering.cube_shift(frame,shifty,shiftx)
+            shifted = vip.preproc.recentering.cube_shift(np.nan_to_num(frame),shifty,shiftx)
             # Save for a full file, not channel by channel
             science_pyn.append(shifted)
         # Save the full file (wlens,nframes,x,y)
@@ -462,7 +464,7 @@ def guess_flux(cube,posn,wlen,angles,psfs):
         psf = vip.metrics.normalize_psf(psf, fwhm, size=11)
         #plot_frames(psf, grid=True, size_factor=4)
         print(psf.shape,frame.shape)
-        r_0, theta_0, f_0 = firstguess(frame, angles, psf, ncomp=5, plsc=pixscale,
+        r_0, theta_0, f_0 = firstguess_simplex(frame, angles, psf, ncomp=5, plsc=pixscale,
                                     planets_xy_coord=[posn], fwhm=fwhm,
                                     f_range=None, annulus_width=3, aperture_radius=3,
                                     simplex=True, plot=False, verbose=True)
@@ -474,7 +476,7 @@ def guess_flux(cube,posn,wlen,angles,psfs):
     fs = np.array(fs)
     np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_astrometry",np.array([rs,ts,fs]))
 
-def mcmc_flux(contrast,psfs,rs,ts,fs):
+"""def mcmc_flux(contrast,psfs,rs,ts,fs):
     nwalkers, itermin, itermax = (100, 200, 500)
     maxs = [],
     confs = []
@@ -500,7 +502,7 @@ def mcmc_flux(contrast,psfs,rs,ts,fs):
     maxs = np.array(maxs)
     confs = np.array(conf)
     np.save(output_dir + extraction_name + "_best_fit",maxs)
-    np.save(output_dir + extraction_name + "_intervals",confs)
+    np.save(output_dir + extraction_name + "_intervals",confs)"""
 
 def create_circular_mask(h, w, center=None, radius=None):
 

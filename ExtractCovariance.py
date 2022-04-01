@@ -74,15 +74,15 @@ def main(args):
     # Setup directories
     if not data_dir.endswith("/"):
         data_dir += "/"
-    posn_dict = read_astrometry(data_dir+"../",planet_name)
+    posn_dict = read_astrometry(os.path.dirname(os.path.dirname(data_dir)) + "/",planet_name)
 
     # Spectrum - the flux calibrated spectrum
-    if os.path.exists(data_dir + instrument + "_" + planet_name + "_scaled_spectrum.npy"):
-        print("Using MCMC scaled spectrum")
-        spectrum = np.load(data_dir +  instrument + "_" + planet_name + "_scaled_spectrum.npy")
-    else:
-        print("Using standard flux-calibrated spectrum")
-        spectrum = np.load(data_dir + instrument + "_" + planet_name + "_flux_10pc_7200K.npy")
+    #if os.path.exists(data_dir + instrument + "_" + planet_name + "_scaled_spectrum.npy"):
+    #    print("Using MCMC scaled spectrum")
+    #    spectrum = np.load(data_dir +  instrument + "_" + planet_name + "_scaled_spectrum.npy")
+
+    print("Using standard flux-calibrated spectrum")
+    spectrum = np.load(data_dir + instrument + "_" + planet_name + "_flux_10pc_7200K.npy")
     # Contrast unit spectrum.
     try:
         print("Using contrasts")
@@ -90,6 +90,10 @@ def main(args):
     except:
         print("Using contrasts")
         contrasts = np.load(data_dir + instrument + "_" + planet_name + "_contrast.npy")
+
+    # Hacky fix, for some reason pynpoint SPHERE data is off by this factor
+    if "pynpoint" in data_dir:
+        contrasts *= DIT_SCIENCE/DIT_FLUX
     # Residuals - the full frame residuals from processing, in contrast units
     # Might need to be careful about naming here.
     print("Loading Data")
@@ -103,8 +107,10 @@ def main(args):
         else:
             dataind = 1
         residuals = np.array([hdu.data for hdu in hdul[dataind:]])
-        if "pynpoint" in data_dir or "andromeda" in data_dir:
+        if dataind == 0:
             residuals = residuals[0]
+        if "pynpoint" in data_dir and "sphere" in instrument.lower():
+            residuals *= DIT_SCIENCE/DIT_FLUX
         print(residuals.shape)
     else:
         print("No residual file found!")
@@ -493,7 +499,7 @@ def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,con
     c4 = fits.Column(name = "CORRELATION", array = correlation, format =  str(correlation.shape[0])+'D',unit = " - ")
     c5 = fits.Column(name = "ERROR", array = error, format ='D',unit = "[W/m2/micron]")
 
-    columns = [c1,c2,c3,c4]
+    columns = [c1,c2,c3,c4,c5]
     if contrast is not None:
         c6 = fits.Column(name = "CONTRAST", array = contrast, format = 'D',unit = " - ")
         c7 = fits.Column(name = "COVARIANCE_CONTRAST", array = cont_cov, format = str(cont_cov.shape[0])+'D',unit = " - ^2")

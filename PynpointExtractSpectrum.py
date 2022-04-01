@@ -171,7 +171,8 @@ def main(args):
     run_all_channels(nChannels,
                     base_name,
                     instrument + "_" + planet_name,
-                    posn_pyn)
+                    posn_pyn,
+                    skip = True)
 
     # Save outputs to numpy arrays
     contrasts = save_contrasts(nChannels,
@@ -251,7 +252,6 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
     pipeline = Pypeline(working_place_in=working_dir,
                         input_place_in=data_dir,
                         output_place_in=data_dir + "pynpoint_"+planet_name + "/")
-
     module = FitsReadingModule(name_in="read_science",
                                input_dir=data_dir,
                                image_tag="science",
@@ -299,7 +299,7 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
     pipeline.add_module(module)
     app = 6.*pixscale
     module = SimplexMinimizationModule(name_in = 'simplex',
-                                       image_in_tag = 'science_bad',
+                                       image_in_tag = 'science',
                                        psf_in_tag = 'psf',
                                        res_out_tag = planet_name + '_flux_channel_' + channel+"_",
                                        flux_position_tag = planet_name + '_flux_pos_channel_' + channel +"_",
@@ -319,6 +319,8 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
         flux = pipeline.get_data(planet_name + '_flux_pos_channel_' + str(channel).zfill(3) + "_" + str(pca).zfill(3))
         np.savetxt(data_dir+ "pynpoint_"+planet_name + "/" + output_name + "_ch" + str(channel).zfill(3) +"_flux_pos_out_pca_" +str(pca)+ ".dat",flux)
         residuals = pipeline.get_data(planet_name + '_flux_channel_' + str(channel).zfill(3) + "_" + str(pca).zfill(3))
+        norm = pipeline.get_data("psf")
+        residuals = residuals / NORMFACTOR  / np.nanmax(norm)
         save_residuals(residuals[-1],output_name +"_residuals_" + str(channel).zfill(3) + "_pca_" + str(pca), data_dir+ "pynpoint_"+planet_name + "/" )
     os.remove(working_dir + "PynPoint_database.hdf5")
 
@@ -391,15 +393,15 @@ def run_all_channels(nChannels, base_name, output_name, posn, skip = True):
     # Write residuals in magnitude units
     hdu = fits.PrimaryHDU(residuals)
     hdul = fits.HDUList([hdu])
-    hdul.writeto(data_dir+"pynpoint_"+planet_name + "/" + instrument+ "_"+ planet_name + '_magnitudes.fits',
-                 overwrite=True,checksum=True,output_verify='exception')
-
-    # Write contrast in contrast units (surprise)
-    hdu = fits.PrimaryHDU(contrasts)
-    hdul = fits.HDUList([hdu])
     hdul.writeto(data_dir+"pynpoint_"+planet_name + "/" + instrument+ "_"+ planet_name + '_residuals.fits',
                  overwrite=True,checksum=True,output_verify='exception')
 
+    # Write contrast in contrast units (surprise)
+    """hdu = fits.PrimaryHDU(contrasts)
+    hdul = fits.HDUList([hdu])
+    hdul.writeto(data_dir+"pynpoint_"+planet_name + "/" + instrument+ "_"+ planet_name + '_residuals.fits',
+                 overwrite=True,checksum=True,output_verify='exception')
+    """
 
 # Save contrasts to a useable array
 def save_contrasts(nChannels,base_name,output_place,output_name):
@@ -462,7 +464,7 @@ def preproc_files(skip = False):
         hdul = fits.open(data_dir + science_name)
         cube = hdul[0].data
         CENTER = (cube.shape[-2]/2.0,cube.shape[-1]/2.0)
-        NORMFACTOR = DIT_FLUX/DIT_SCIENCE
+        NORMFACTOR = DIT_SCIENCE/DIT_FLUX
         N_cubes = cube.shape[1]
         pcas[pcas>=N_cubes] = N_cubes -1
         pcas = np.unique(pcas).tolist()
@@ -522,8 +524,7 @@ def preproc_files(skip = False):
             centy = dataset.centers.reshape(len(filelist),37,2)[:,channel,1]
             shiftx,shifty = (CENTER[0]*np.ones_like(centx) - centx,
                              CENTER[1]*np.ones_like(centy) - centy)
-            shifted = recentering.cube_shift(frame,shifty,shiftx)
-
+            shifted = recentering.cube_shift(np.nan_to_num(frame),shifty,shiftx,border_mode='constant')
             # Copy the GPI header, and add some notes of our own
             header_hdul = fits.open(filelist[0])
             # Save channel by channel files
@@ -563,7 +564,7 @@ def preproc_files(skip = False):
                                 ((padx,padx+1),
                                 (pady,pady+1)),
                                 'constant')
-                    padded = recentering.frame_shift(padded,0.5,0.5)
+                    padded = recentering.frame_shift(np.nan_to_num(padded),0.5,0.5)
                 else:
                     padded = np.pad(frame,
                                     ((padx,padx),
