@@ -34,9 +34,11 @@ from Astrometry import get_astrometry, read_astrometry
 #rc('text', usetex=True)
 
 ### KLIP Parameters ###
-numbasis = np.array([2,3,4,5,6,8,10,12,15,18,20,25]) # "k_klip", this can be a list of any size.
+#numbasis = np.array([2,3,4,5,6,8,10,12,15,18,20,25]) # "k_klip", this can be a list of any size.
+numbasis = np.array([2,3,4,10]) # "k_klip", this can be a list of any size.
+
 maxnumbasis = 25 # Max components to be calculated
-movement = 2.0 # aggressiveness for choosing reference library
+movement = 1.0 # aggressiveness for choosing reference library
 stamp_size = 9 # how big of a stamp around the companion in pixels
                 # stamp will be stamp_size**2 pixels
 sections = 10
@@ -185,13 +187,18 @@ def init_gpi():
         os.makedirs(data_dir + "pyklip", exist_ok=True)
 
     filelist = sorted(glob.glob(data_dir +"*distorcorr.fits"))
-    """if "K1" in instrument:
-        print("skipping 0,1,36")
-        dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True, skipslices=[0,1,36])
-    elif "K2" in instrument:
-        print("skipping 0,1,2")
-        dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=True, skipslices=[0,1,2])
-    else:"""
+    if not os.path.exists(data_dir + "wavelength.fits"):
+        wlen = np.genfromtxt(data_dir + "wlens.txt")
+        hdu_wlen = fits.PrimaryHDU([wlen])
+        hdu_wlen.header["UNITS"] = "micron"
+        hdul_wlen = fits.HDUList([hdu_wlen])
+        hdul_wlen.writeto(data_dir + "wavelength.fits",overwrite=True)
+    if not os.path.exists(data_dir + "parangs.fits"):
+        pas = np.genfromtxt(data_dir + "parangs.txt")
+        hdu_pa = fits.PrimaryHDU([pas])
+        hdu_pa.header["UNITS"] = "degree"
+        hdul_pa = fits.HDUList([hdu_pa])
+        hdul_pa.writeto(data_dir + "parangs.fits",overwrite=True)
     dataset = GPI.GPIData(filelist, highpass=False, PSF_cube = psf,recalc_centers=False)
     return dataset
 
@@ -237,8 +244,13 @@ def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
     planet_sep =planet_sep/1000 / pxscale #mas to pixels
 
     # Print some sanity checks
-    print(planet_sep,planet_pa)
-    print(dataset.input.shape,numbasis,PSF_cube.shape)
+    #print(planet_sep,planet_pa)
+    #print(dataset.input.shape,numbasis,PSF_cube.shape)
+    #spectrum = np.load("/u/nnas/data/HR8799/SPHERE-ZURLO/pyklip/SPHEREYJH_HR8799d_contrasts.npy")[0]
+    #print(spectrum.shape)
+    N_cubes =  int(dataset.input.shape[0]/np.unique(dataset.wvs).shape[0])
+    #print(N_cubes)
+
 
     ###### The forward model class ######
     # WATCH OUT FOR MEMORY ISSUES HERE
@@ -258,11 +270,12 @@ def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
     ###### Now run KLIP! ######
     fm.klip_dataset(dataset, fm_class,
                     fileprefix=instrument + "_" + planet_name +"_fmspect",
+                    mode = "ADI+SDI",
                     annuli=[[planet_sep-1.5*stamp_size,planet_sep+1.5*stamp_size]], # select a patch around the planet (radius)
                     subsections=[[(planet_pa-2.0*stamp_size)/180.*np.pi,\
                                   (planet_pa+2.0*stamp_size)/180.*np.pi]], # select a patch around the planet (angle)
-                    movement=movement,
-                    #flux_overlap = 0.1,
+                    movement=None,
+                    flux_overlap = 0.2,
                     numbasis = numbasis,
                     maxnumbasis=maxnumbasis,
                     numthreads=numthreads,
@@ -289,6 +302,17 @@ def KLIP_Extraction(dataset, PSF_cube, posn, numthreads):
     np.save(data_dir + "pyklip/" + instrument + "_" + planet_name + "exspect", exspect)
     np.save(data_dir + "pyklip/" + instrument + "_" + planet_name + "fm_matrix", fm_matrix)
     return exspect, fm_matrix
+
+def forward_model_extraction(dataset,exspect,posn,spot_to_star_ratio,stellar_model):
+    planet_sep, planet_pa = posn
+    fm_class = fmpsf.FMPlanetPSF(dataset.input.shape, numbasis, guesssep, guesspa, guessflux, dataset.psfs,
+                             np.unique(dataset.wvs), dn_per_contrast, star_spt='A6',
+                             spectrallib=[guessspec])
+    fit = fitpsf.FMAstrometry(planet_sep, planet_pa, 13, method="mcmc")
+    # set kernel, no read noise
+    corr_len_guess = 3.
+    corr_len_label = r"$l$"
+    fit.set_kernel("matern32", [corr_len_guess], [corr_len_label])
 
 def get_spectrum(dataset,exspect,spot_to_star_ratio,stellar_model):
     # Convert the extracted spectrum into contrast and flux units

@@ -297,7 +297,7 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
                                   iterate=3)
 
     pipeline.add_module(module)
-    app = 6.*pixscale
+    app = 4.*pixscale
     module = SimplexMinimizationModule(name_in = 'simplex',
                                        image_in_tag = 'science',
                                        psf_in_tag = 'psf',
@@ -305,10 +305,10 @@ def simplex_one_channel(channel,input_name,psf_name,output_name,posn,working_dir
                                        flux_position_tag = planet_name + '_flux_pos_channel_' + channel +"_",
                                        position = posn,
                                        magnitude = 14.0, # approximate planet contrast in mag
-                                       psf_scaling = -1*NORMFACTOR, # deal with spectrum mormalization later
+                                       psf_scaling = -1*NORMFACTOR,
                                        merit = 'gaussian', #better than hessian
                                        aperture = app, # in arcsec
-                                       tolerance = 0.0005, # tighter tolerance is good
+                                       tolerance = 0.01, # tighter tolerance is good
                                        pca_number = pcas, #listed above
                                        cent_size = 0.12, # how much to block out
                                        offset = 3.0) #use fixed astrometry from KLIP

@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import StrMethodFormatter
 from matplotlib import rcParams
 from matplotlib import rc
-
+from vip_hci.fm import normalize_psf
 # My own files
 from Astrometry import get_astrometry, read_astrometry, init_sphere, init_gpi, init_psfs
 
@@ -77,23 +77,23 @@ def main(args):
     posn_dict = read_astrometry(os.path.dirname(os.path.dirname(data_dir)) + "/",planet_name)
 
     # Spectrum - the flux calibrated spectrum
-    #if os.path.exists(data_dir + instrument + "_" + planet_name + "_scaled_spectrum.npy"):
-    #    print("Using MCMC scaled spectrum")
-    #    spectrum = np.load(data_dir +  instrument + "_" + planet_name + "_scaled_spectrum.npy")
+    """if os.path.exists(data_dir + instrument + "_" + planet_name + "_scaled_spectrum.npy"):
+        print("Using MCMC scaled spectrum")
+        spectrum = np.load(data_dir +  instrument + "_" + planet_name + "_scaled_spectrum.npy")"""
 
     print("Using standard flux-calibrated spectrum")
     spectrum = np.load(data_dir + instrument + "_" + planet_name + "_flux_10pc_7200K.npy")
     # Contrast unit spectrum.
     try:
         print("Using contrasts")
-        contrasts = np.load(data_dir + instrument + "_" + planet_name + "_contrasts.npy")
+        if "andromeda" in data_dir.lower():
+            contrasts = np.load(data_dir + instrument + "_" + planet_name + "_peak_contrast.npy")
+        else:
+            contrasts = np.load(data_dir + instrument + "_" + planet_name + "_contrasts.npy")
     except:
         print("Using contrasts")
         contrasts = np.load(data_dir + instrument + "_" + planet_name + "_contrast.npy")
 
-    # Hacky fix, for some reason pynpoint SPHERE data is off by this factor
-    if "pynpoint" in data_dir:
-        contrasts *= DIT_SCIENCE/DIT_FLUX
     # Residuals - the full frame residuals from processing, in contrast units
     # Might need to be careful about naming here.
     print("Loading Data")
@@ -109,8 +109,16 @@ def main(args):
         residuals = np.array([hdu.data for hdu in hdul[dataind:]])
         if dataind == 0:
             residuals = residuals[0]
-        if "pynpoint" in data_dir and "sphere" in instrument.lower():
+            # Hacky fix, for some reason pynpoint SPHERE data is off by this factor
+        if not "pyklip" in data_dir:
+            spectrum *= DIT_SCIENCE/DIT_FLUX
+            contrasts *= DIT_SCIENCE/DIT_FLUX
             residuals *= DIT_SCIENCE/DIT_FLUX
+
+        #if "pyklip" in data_dir:
+        #    #contrasts *= (DIT_SCIENCE/DIT_FLUX)**2
+        #    #residuals *= (DIT_SCIENCE/DIT_FLUX)**2
+
         print(residuals.shape)
     else:
         print("No residual file found!")
@@ -136,6 +144,7 @@ def main(args):
         elif "pyklip" in data_dir:
             #pcas = [2,3,4,5,6,8,10]
             pcas = [2,3,4,5,6,8,10,12,15,18,20,25]
+            #pcas = [2,3,4,10]
     else:
         npca = None
         nl = residuals.shape[0]
@@ -144,8 +153,15 @@ def main(args):
     # First we need to get the uncorrelated error
     # This is a comnbination of residual error far from the star, and photometric error on the stellar psf
     # Both real units and fractional error are returned
-    total_err,frac_err,_,_ = uncorrelated_error(residuals,spectrum,posn_dict,nl,npca,flux_cal=True)
-    cont_err,frac_cont_err,_,_ = uncorrelated_error(residuals,contrasts,posn_dict,nl,npca,flux_cal=False)
+    if not "andromeda" in data_dir.lower():
+        total_err,frac_err,_,_ = uncorrelated_error(residuals,spectrum,posn_dict,nl,npca,flux_cal=True)
+        cont_err,frac_cont_err,_,_ = uncorrelated_error(residuals,contrasts,posn_dict,nl,npca,flux_cal=False)
+
+    else:
+        print("Using Andromeda calculated errors")
+        cont_err = np.load(data_dir + instrument + "_" + planet_name +"_contrast_err_point.npy")
+        model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_" + instrument.upper() + "_fullfit_10pc.dat").T
+        total_err = cont_err * model[1] *(distance/10.)**2
     # Now we can compute the correlation and covariance matrices
     # The covariance matrix is normalised so that sqrt(diag(cov)) = uncorrelated error
     cor,cov = get_covariance(residuals,total_err,posn_dict,nl,npca)
@@ -154,7 +170,11 @@ def main(args):
     print("Done!")
 
     # All of the outputs get combined and saved to a fits file
-    fits_output(spectrum,cov,cor, pcas=pcas, contrast = contrasts, cont_cov = cov_cont)
+    if not "andromeda" in data_dir.lower():
+        fits_output(spectrum,cov,cor, pcas=pcas, contrast = contrasts, cont_cov = cov_cont)
+    else:
+        fits_output(spectrum,cov,cor, pcas=pcas, contrast = contrasts, cont_cov = cov_cont, error = total_err, cont_error = cont_err)
+
     return
 
 def create_circular_mask(h, w, center=None, radius=None):
@@ -200,8 +220,8 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
             for i in range(nl):
                 # Stack and median subtract
                 med = residuals[j,i]
-                if "sphere" in instrument.lower():
-                    med = med - zeropoint
+                #if "sphere" in instrument.lower():
+                #    med = med - zeropoint
                 # Mask out planet (not sure if correct location)
 
                 mask = create_circular_mask(residuals.shape[-2],residuals.shape[-1],
@@ -213,7 +233,7 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
                 flux = annulus.multiply(mask*med)[annulus.data>0]
                 #print(flux)
                 fluxes.append(flux)
-                if i==30 and j==4:
+                if i==30 and j==2:
                     fig,ax = plt.subplots(ncols = 2, figsize=(16,8))
                     ax = ax.flatten()
                     im0 = ax[0].imshow(med)
@@ -338,8 +358,8 @@ def uncorrelated_error(residuals,spectrum,posn_dict,nl,npca=None,flux_cal = True
             psf_cube/=stellar_model
     elif instrument.lower() == "sphereyjh":
         psf_name = "../psf_cube.fits"
-        psf_cube = np.nan_to_num(fits.open(glob.glob(data_dir + psf_name)[0])[0].data) #* DIT_SCIENCE/DIT_FLUX
-        psf_cube/=np.max(psf_cube,axis=(1,2))[:,None,None]
+        psf_cube = np.nan_to_num(fits.open(glob.glob(data_dir + psf_name)[0])[0].data)[:,100:150,100:150] #* DIT_SCIENCE/DIT_FLUX
+        psf_cube = normalize_psf(psf_cube)
         psf_cube *= stellar_model[:,None,None]
 
 
@@ -378,10 +398,12 @@ def uncorrelated_error(residuals,spectrum,posn_dict,nl,npca=None,flux_cal = True
         x_pix = ((posn_dict["Separation [mas]"][0]/1000)/pxscale)*np.sin((shift-posn_dict["PA [deg]"][0]) * np.pi / 180.)
         y_pix = ((posn_dict["Separation [mas]"][0]/1000)/pxscale)*np.cos((shift-posn_dict["PA [deg]"][0]) * np.pi / 180.)
         posn = (CENTER[0]+x_pix,CENTER[1]+y_pix)
+        epos = (179,131)
     else:
         # read_astrometry gives offsets in x,y, need to compute absolute posns
         posn = (CENTER[0]-(1*posn_dict["Px RA offset [px]"][0]), CENTER[0]-(1*posn_dict["Px Dec offset [px]"][0]))
         # But this actually works? At least for SPHERE data - need to see what's up with GPI TOD)
+        epos = (171,151)
 
     if npca is not None:
         for j in range(npca):
@@ -395,12 +417,15 @@ def uncorrelated_error(residuals,spectrum,posn_dict,nl,npca=None,flux_cal = True
                 mask = create_circular_mask(residuals.shape[-2],residuals.shape[-1],
                                             center = posn,
                                             radius = 6.0)
-
+                # mask out HR 8799e
+                maske = create_circular_mask(residuals.shape[-2],residuals.shape[-1],
+                                            center = epos,
+                                            radius = 6.0)
                 # Mask out planet (not sure if correct location)
                 # Get fluxes of all pixels within annulus
                 annulus = annulus_c.to_mask(method='center')
                 # Assuming contrast units for residuals
-                flux = annulus.multiply(med*mask)[annulus.data>0]*stellar_model[i]
+                flux = annulus.multiply(med*mask*maske)[annulus.data>0]*stellar_model[i]
                 #frac_err = spectrum[j,i]/np.sqrt(np.sum(flux)*flux.shape[0]/16.0 + spectrum[j,i])
                 frac_err= np.std(flux)/spectrum[j,i]
                 err = np.std(flux)
@@ -476,7 +501,7 @@ def photometric_error(psf_cube):
     #print(std, bkgs)
     return bkgs
 
-def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,cont_cov = None):
+def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,cont_cov = None, error = None, cont_error = None):
     wavelength = fits.open(data_dir + "../wavelength.fits")[0].data
     if len(wavelength.shape) != 1:
         wavelength = wavelength[0]
@@ -488,8 +513,10 @@ def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,con
     filelist = glob.glob(data_dir + instrument + "_" + planet_name + "_residuals.fits")
     hdr_hdul = fits.open(filelist[0])
     hdr = hdr_hdul[0].header
-    error = np.sqrt(np.dot(covariance,np.ones_like(spectrum)))
-
+    if error is None:
+        err = np.sqrt(np.diag(covariance))#,np.ones_like(spectrum)))
+    else:
+        err = error
     primary_hdu = fits.PrimaryHDU([])
     primary_hdu.header = hdr
     primary_hdu.header['OBJECT'] = planet_name
@@ -497,13 +524,16 @@ def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,con
     c2 = fits.Column(name = "FLUX", array = spectrum, format = 'D',unit = "W/m2/micron")
     c3 = fits.Column(name = "COVARIANCE", array = covariance, format = str(covariance.shape[0])+'D',unit = "[W/m2/micron]^2")
     c4 = fits.Column(name = "CORRELATION", array = correlation, format =  str(correlation.shape[0])+'D',unit = " - ")
-    c5 = fits.Column(name = "ERROR", array = error, format ='D',unit = "[W/m2/micron]")
+    c5 = fits.Column(name = "ERROR", array = err, format ='D',unit = "[W/m2/micron]")
 
     columns = [c1,c2,c3,c4,c5]
     if contrast is not None:
         c6 = fits.Column(name = "CONTRAST", array = contrast, format = 'D',unit = " - ")
         c7 = fits.Column(name = "COVARIANCE_CONTRAST", array = cont_cov, format = str(cont_cov.shape[0])+'D',unit = " - ^2")
         columns.extend([c6,c7])
+        if cont_error is not None:
+            c8 = fits.Column(name = "ERROR_CONTRAST", array = cont_error, format ='D',unit = " - ")
+            columns.extend([c8])
     table_hdu = fits.BinTableHDU.from_columns(columns,name = 'SPECTRUM')
     hdul = fits.HDUList([primary_hdu,table_hdu])
 
@@ -515,13 +545,13 @@ def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,con
     hdul.writeto(outstring,overwrite=True,checksum=True,output_verify='exception')
     return
 
-def fits_output(spectrum,covariance,correlation,pcas=None,contrast = None,cont_cov = None):
+def fits_output(spectrum,covariance,correlation,pcas=None,contrast = None,cont_cov = None, error = None, cont_error = None):
     if pcas is not None:
         for i,pca in enumerate(pcas):
             if contrast is None:
-                fits_one_output(spectrum[i],covariance[i],correlation[i],pca,None,None)
+                fits_one_output(spectrum[i],covariance[i],correlation[i],pca,None,None,error = error, cont_error = None)
             else:
-                fits_one_output(spectrum[i],covariance[i],correlation[i],pca,contrast[i],cont_cov[i])
+                fits_one_output(spectrum[i],covariance[i],correlation[i],pca,contrast[i],cont_cov[i],error = error, cont_error = cont_error)
     else:
         fits_one_output(spectrum,covariance,correlation,None,contrast,cont_cov)
     return

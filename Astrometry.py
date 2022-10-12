@@ -231,7 +231,7 @@ def get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux, data_dir, pl
                        pa_uncertainty=0.13)
 
     write_astrometry(fit,data_dir,planet_name)
-    return (fit.sep.bestfit,fit.PA.bestfit)
+    return fit
 
 def plot_astrometry(fit,data_dir,planet_name):
     chain = fit.sampler.chain

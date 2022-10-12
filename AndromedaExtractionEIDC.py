@@ -18,19 +18,27 @@ from matplotlib import rc
 #rc('font',**{'family':'serif','serif':['Computer Modern']},size = 24)
 #rc('font',**{'family':'serif','serif':['Palatino']})
 #rc('text', usetex=True)
+import pandas as pd
 
 from astropy.io import fits
 from scipy.ndimage import rotate
 from photutils import CircularAperture, CircularAnnulus, aperture_photometry
 
 import pyklip.instruments.GPI as GPI
+import pyklip.instruments.SPHERE as SPHERE
+
 import vip_hci as vip
 from hciplot import plot_frames, plot_cubes
 from vip_hci.preproc import cube_recenter_2dfit, cube_recenter_dft_upsampling, cube_shift, cube_crop_frames
 from vip_hci.fm.negfc_simplex import firstguess_simplex#, show_corner_plot, show_walk_plot,confidence
 from vip_hci.invprob.andromeda import andromeda
+from vip_hci.fm import normalize_psf
+from vip_hci.metrics.detection import detection
 
-from Astrometry import get_astrometry, read_astrometry, init_sphere, init_gpi, init_psfs
+from vip_hci.fits import open_fits, write_fits
+
+
+from Astrometry import get_astrometry, read_astrometry, init_gpi, init_psfs
 
 # There is a preprocessing function to help sort everything into the correct formats (GPI and SPHERE)
 data_dir = "/u/nnas/data/HR8799/HR8799_AG_reduced/GPIK2/" #SPHERE-0101C0315A-20/channels/
@@ -89,47 +97,26 @@ def main(args):
     if not os.path.isdir(data_dir + "andromeda"):
         os.makedirs(data_dir + "andromeda", exist_ok=True)
 
-    stellar_model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_" + instrument.upper() + "_fullfit_10pc.dat").T
-
     science,angles,wlen,psfs = init()
     psfs = even_shape(psfs)
     science = even_shape(science)
     print(science.shape,psfs.shape)
     # Check for KLIP astrometry and either read in or create
-    if not os.path.exists(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):
-        if "gpi" in instrument.lower():
-            dataset = init_gpi(data_dir)
-        elif "sphere" in instrument.lower():
-            dataset = init_sphere(data_dir)
-        PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
-        # posn is in sep [mas] and PA [degree], we need offsets in x and y px
-        #posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
-
-    # read_astrometry gives offsets in x,y, need to compute absolute posns
-    posn_dict = read_astrometry(data_dir,planet_name)
-
-    shift = 0.0 # NO SHIFT FOR YJ DATA TO BE
-    x_pix = ((posn_dict["Separation [mas]"][0]/1000)/pixscale)*np.sin((shift-posn_dict["PA [deg]"][0]) * np.pi / 180.)
-    y_pix = ((posn_dict["Separation [mas]"][0]/1000)/pixscale)*np.cos((shift-posn_dict["PA [deg]"][0]) * np.pi / 180.)
-
-    # read_astrometry gives offsets in x,y, need to compute absolute posns
-    if "SPHERE" in instrument:
-        # Not sure why a factor of -1 here
-        posn = (-1*posn_dict["Px RA offset [px]"][0], posn_dict["Px Dec offset [px]"][0])
+    #if not os.path.exists(data_dir + "pyklip/"+ planet_name + "_astrometry.txt"):
+    #    if "gpi" in instrument.lower():
+    #        dataset = init_gpi(data_dir)
+    #    elif "sphere" in instrument.lower():
+    #      dataset = init_sphere(data_dir)
+    #    #PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(dataset)
+    #    # posn is in sep [mas] and PA [degree], we need offsets in x and y px
+    #    #posn = get_astrometry(dataset, PSF_cube, guesssep, guesspa, guessflux,data_dir,planet_name)
+    if os.path.isfile(data_dir + "andromeda/" + instrument+ "_"+ planet_name +"_contrastmap.npy"):
+        contrasts = np.load(data_dir + "andromeda/" + instrument+ "_"+ planet_name +"_contrastmap.npy")
+        snrs = np.load(data_dir + "andromeda/" + instrument+ "_"+ planet_name +"_snr.npy")
+        stds = np.load(data_dir + "andromeda/" + instrument+ "_"+ planet_name +"_stds.npy")
     else:
-        posn = (-1*posn_dict["Px RA offset [px]"][0], -1*posn_dict["Px Dec offset [px]"][0])
-    shift_x = CENTER[0] - science.shape[-2]/2
-    shift_y = CENTER[1] - science.shape[-2]/2
-
-    posn_old = (posn[0] + CENTER[0], posn[1] + CENTER[1])
-
-    # But this actually works? At least for SPHERE data - need to see what's up with GPI TODO
-    posn_and = (posn_old[0]-shift_x, posn_old[1]- shift_y)
-    psn = (CENTER[0]+x_pix,CENTER[1]+y_pix)
-    print(CENTER,posn_and,posn_old, posn,psn,x_pix,y_pix)
-
-    contrasts, snrs, stds = run_andromeda(science,angles,wlen,psfs)
-    aperture_phot_extract(contrasts,stds,psfs,wlen,posn_and)
+        contrasts, snrs, stds = run_andromeda(science,angles,wlen,psfs)
+    aperture_phot_extract(contrasts,stds,snrs,psfs,wlen)
     #guess_flux(contrasts,posn_and,wlen,angles,psfs)
     return
 
@@ -153,19 +140,11 @@ def init():
 
     if "sphere" in instrument.lower():
         NORMFACTOR = DIT_FLUX/DIT_SCIENCE
-        science_name = "frames_removed.fits"
-        if os.path.isfile(data_dir + "psf_satellites_calibrated.fits"):
-            psf_name= "psf_satellites_calibrated.fits"
-        else:
-            psf_name = "psf_cube.fits"
+        science_name = "image_cube_" + instrument + ".fits"
+        psf_name = "psf_cube_" + instrument + ".fits"
         # sanity check on wlen units
-        hdul_w = fits.open(data_dir + "wavelength.fits")
-        if np.mean(hdul_w[0].data)>100.:
-            hdu_wlen = fits.PrimaryHDU([hdul_w[0].data/1000])
-            hdul_wlen = fits.HDUList([hdu_wlen])
-            hdul_wlen.writeto(data_dir + "wavelength.fits",overwrite=True)
-        parang_name = "parang_removed.fits"
-        wlen_name = "wavelength.fits"
+        parang_name = "parallactic_angles_" + instrument + ".fits"
+        wlen_name = "wavelength_vect_"+instrument +".fits"
 
         pixscale = 0.00746
 
@@ -177,7 +156,7 @@ def init():
 
         # Parangs
         ang_hdul = fits.open(data_dir + parang_name)
-        angles = ang_hdul[0].data
+        angles = ang_hdul[0].data[0]
         ang_hdul.close()
 
         if "ESO" in data_dir:
@@ -210,9 +189,9 @@ def init():
         # PSF Data
         psf_hdul = fits.open(data_dir + psf_name)
         psfs = psf_hdul[0].data
-        psfwidth = psfs.shape[-1]/2
-        psfs = psfs[:, int(psfwidth - 20):int(psfwidth + 20),int(psfwidth - 20):int(psfwidth + 20)]
-        psf_hdul.close()
+        #psfwidth = psfs.shape[-1]/2
+        #psfs = psfs[:, int(psfwidth - 20):int(psfwidth + 20),int(psfwidth - 20):int(psfwidth + 20)]
+        #psf_hdul.close()
 
     elif "gpi" in instrument.lower():
         pixscale =  0.014161
@@ -253,7 +232,7 @@ def init():
         # Save the full file (wlens,nframes,x,y)
         science_pyn = np.array(science_pyn)
         science = science_pyn
-        #CENTER = (science.shape[-2]/2.0,science.shape[-1]/2.0)
+        CENTER = (science.shape[-2]/2.0,science.shape[-1]/2.0)
 
         hdu = fits.PrimaryHDU(science_pyn)
         header_hdul = fits.open(filelist[0])
@@ -267,9 +246,9 @@ def init():
         header_hdul.close()
 
         # Save wavelengths
-        hdu = fits.PrimaryHDU(dataset.wvs[:37])
-        hdul_new = fits.HDUList([hdu])
-        hdul_new.writeto(data_dir + "wavelength.fits",overwrite = True)
+        #hdu = fits.PrimaryHDU(dataset.wvs[:37])
+        #hdul_new = fits.HDUList([hdu])
+        #hdul_new.writeto(data_dir + "wavelength.fits",overwrite = True)
         wlen = dataset.wvs[:37]
         # pyklip does weird things with the PAs, so let's fix that.
         # Keep or remove dataset.ifs_rotation? GPI IFS is rotated 23.5 deg,
@@ -281,13 +260,33 @@ def init():
     set_fwhm(psfs,0)
     return science, angles, wlen, psfs
 
+def init_sphere(data_dir):
+
+    datacube = data_dir + "frames_removed.fits"
+    datacube = data_dir + "image_cube_" + instrument + ".fits"
+    psfcube = data_dir + "psf_cube_" + instrument + ".fits"
+    # sanity check on wlen units
+    wvinfo = data_dir + "wavelength_vect_"+instrument +".fits"
+    # Sanity check on data shape
+    # not a fan of hard coded number of channels
+    fitsinfo = data_dir +  "parallactic_angles_" + instrument + ".fits"
+
+    dataset = SPHERE.Ifs(datacube,
+                         psfcube,
+                         fitsinfo,
+                         wvinfo,
+                         nan_mask_boxsize=9,
+                         psf_cube_size = 13)
+    print("read in data")
+    return dataset
+
 # Get the PSF FWHM for each channel
 def set_fwhm(psfs,channel):
     global fwhm
     if len(psfs.shape) ==4 :
-        fwhm_fit = vip.var.fit_2dgaussian(psfs[int(channel),0], crop=True, cropsize=8, debug=False)
+        fwhm_fit = vip.var.fit_2dgaussian(psfs[int(channel),0], crop=False,debug=False)
     else:
-        fwhm_fit = vip.var.fit_2dgaussian(psfs[int(channel)], crop=True, cropsize=8, debug=False)
+        fwhm_fit = vip.var.fit_2dgaussian(psfs[int(channel)], crop=False, debug=False)
 
     fwhm = np.mean(np.array([fwhm_fit['fwhm_y'],fwhm_fit['fwhm_x']]))*pixscale # fit for fwhm
     return
@@ -339,9 +338,9 @@ def run_andromeda(data,angles,wlen,psfs):
             #ang = -1*angles
             iwa = 2.0
             min_sep = 0.45
-            owa = 60./oversampling
-            width = 0.8
-            filtering_frac = 0.35
+            owa = 47./oversampling
+            width = 0.7
+            filtering_frac = 0.2
         else:
             iwa = 1.0
             min_sep = 0.25
@@ -401,58 +400,55 @@ def run_andromeda(data,angles,wlen,psfs):
 
     return contrasts, snrs, std_norms
 
-def aperture_phot_extract(contrasts,stds,psfs,wlen,posn):
-    mask = create_circular_mask(contrasts.shape[1],contrasts.shape[2],
-                            center = posn,
-                            radius = 5.0)
-    aperture = CircularAperture([posn], r=5.0)
+def aperture_phot_extract(contrasts, stds, snrs, psfs, wlen):
 
-    #Contrast
-    spectrum = []
-    peak_spec = []
+    snr_map = np.mean(snrs,axis = 0)
+    print(fwhm, snrs.shape,snr_map.shape,psfs.shape)
+    output_table = detection(snr_map,
+                    fwhm=fwhm,
+                    psf=normalize_psf(psfs[0], force_odd = False),
+                    bkg_sigma=5.0,
+                    matched_filter=True,
+                    mask=True,
+                    snr_thresh=5.0,
+                    nproc=numthreads,
+                    plot=False,
+                    debug=True,
+                    full_output=True,
+                    verbose=True)
+    filtered = output_table[output_table['px_snr'] > 5.0]
+    filtered.to_csv(path_or_buf=data_dir + "andromeda/"+instrument + "_" + planet_name + "_detectedpeaks.dat")
+    peaks = np.array([filtered['x'],filtered['y']]).T
+    spectra = []
+    errors = []
+    for posn in peaks:
+        mask = create_circular_mask(contrasts.shape[1],contrasts.shape[2],
+                                center = posn,
+                                radius = 5.0)
+        aperture = CircularAperture([posn], r=5.0)
 
-    for i,frame in enumerate(contrasts):
-        set_fwhm(psfs,i)
-        phot_table = aperture_photometry(frame,aperture)
-        spectrum.append(phot_table['aperture_sum'][0])
-        peak_spec.append(np.nanmax(frame[int(posn[1])-2:int(posn[1])+2,int(posn[0])-2:int(posn[0])+2]))
+        #Contrast
+        peak_spec = []
+        for i,frame in enumerate(contrasts):
+            set_fwhm(psfs,i)
+            peak_spec.append(np.nanmax(frame[int(posn[1])-2:int(posn[1])+2,int(posn[0])-2:int(posn[0])+2]))
 
-    spectrum = np.array(spectrum)
-    peak_spec = np.array(peak_spec)
-    np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_contrast",spectrum)
-    np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_peak_contrast",peak_spec)
+        peak_spec = np.array(peak_spec)
+        spectra.append(peak_spec)
+        #np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_peak_contrast",peak_spec)
 
-    # Error
-    errs = []
-    errpt = []
-    for i,frame in enumerate(stds):
-        set_fwhm(psfs,i)
-        phot_table = aperture_photometry(frame,aperture)
-        errs.append(phot_table['aperture_sum'][0])
-        errpt.append(frame[int(posn[1]),int(posn[0])])
+        # Error
+        errpt = []
+        for i,frame in enumerate(stds):
+            set_fwhm(psfs,i)
+            errpt.append(frame[int(posn[1]),int(posn[0])])
 
-    errs = np.array(errs)
-    errpt = np.array(errpt)
-
-    np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_conterr",errs)
-    np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_contrast_err_point",errpt)
-
-    # Flux
-    stellar_model = np.genfromtxt("/u/nnas/data/HR8799/stellar_model/hr8799_star_spec_"+ instrument.upper() +"_fullfit_10pc.dat").T
-    fluxes = stellar_model[1]*peak_spec*(distance/10.)**2 / (DIT_FLUX/DIT_SCIENCE)
-    np.save(data_dir + "andromeda/" + instrument + "_" + planet_name + "_flux_10pc_7200K",fluxes)
-
-    #Plotting
-    fig,ax = plt.subplots(figsize = (16,10))
-    ax.set_xlabel("Wavelength [micron]")
-    ax.set_ylabel("Contrast")
-    ax.set_title(instrument + " " + planet_name + "Contrast And")
-    ax.errorbar(wlen,peak_spec,yerr=errpt,label="Aperture Photometry")
-    #ax.plot(wlen,fit_spec[:,0],label="Fit")
-    plt.legend()
-    plt.savefig(data_dir + "andromeda/" + instrument + "_" + planet_name +"_contrasts_AND.pdf")
-
-    return spectrum
+        errpt = np.array(errpt)
+        errors.append(errpt)
+        #np.save(data_dir + "andromeda/"+instrument + "_" + planet_name + "_contrast_err_point",errpt)
+    contrasts = np.array(contrasts)
+    errors = np.array(errors)
+    return peaks, contrasts, errors
 
 def guess_flux(cube,posn,wlen,angles,psfs):
     rs = [] #radius (separation)
