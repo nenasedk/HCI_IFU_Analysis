@@ -121,7 +121,8 @@ class IFUData(DataObject):
         self.pa = parallactic_angles
         self.distance = distance*u.parsec
         self.verbose = verbose
-        self.centers = None
+        self.center = None
+        self.center_per_frame = None
         return
 
     def read_from_directory(self,
@@ -250,7 +251,7 @@ class IFUData(DataObject):
         nInts = len(filelist)
         nChannels = np.unique(dataset.wvs).shape[0]
         centers = dataset.centers.reshape(nInts,nChannels,2)
-
+        self.center = centers
         # Need to order the GPI data for pynpoint
         shape = dataset.input.shape
         science = dataset.input.reshape(nInts,nChannels,shape[-2],shape[-1])
@@ -258,7 +259,7 @@ class IFUData(DataObject):
 
         cube = []
         CENTER = (shape[-2]/2.0,shape[-1]/2.0)
-        self.centers = (shape[-2]/2.0,shape[-1]/2.0)
+        self.center = (shape[-2]/2.0,shape[-1]/2.0)
 
         for channel,stack in enumerate(science[:]):
             # The PSF center isn't aligned with the image center, so let's fix that
@@ -290,7 +291,7 @@ class IFUProcessingObject:
                  planet_name: str,
                  IFUData: Optional[IFUData] = None,
                  input_path: Optional[str] = "",
-                 output_path: Optional[str] = "",):
+                 output_path: Optional[str] = ""):
         self.instrument = instrument
         self.planet_name = planet_name
         self.data = IFUData

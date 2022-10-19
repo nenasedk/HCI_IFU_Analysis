@@ -61,11 +61,11 @@ class IFU1DExtraction(IFUProcessingObject):
                  verbose = 2,
                  algorithm = None
                  ):
-        super.__init__(instrument = instrument,
-                       planet_name = planet_name,
-                       IFUData = IFUData,
-                       input_path = input_path,
-                       output_path = output_path)
+        super().__init__(instrument = instrument,
+                         planet_name = planet_name,
+                         IFUData = IFUData,
+                         input_path = input_path,
+                         output_path = output_path)
 
         self.guessep,self.guesspa = estimated_position
         self.guessep*=u.mas
@@ -92,6 +92,20 @@ class IFU1DExtraction(IFUProcessingObject):
         """
         Run an HCI Algorithm
         """
+    def get_astrometry(self,
+                       guessflux = 1e-6,
+                       stellar_type = 'A0V'):
+        astro_obj = IFUAstrometry(self.data,
+                                  self.instrument,
+                                  self.planet_name,
+                                  (self.guessep.value,self.guesspa.value),
+                                  self.pixel_scale,
+                                  self.input_path,
+                                  f"{self.input_path}pyklip/",
+                                  self.verbose)
+        x_offset, y_offset = astro_obj.get_astrometry(guessflux,stellar_type)
+        self.posn = (self.data.center[0] + x_offset, self.data.center[1] + y_offset)
+        return self.posn
 
     def load_stellar_model(path):
         self.stellar_model = SpectralData(f"{self.data.name}_stellar_model",
@@ -122,7 +136,7 @@ class IFU1DExtraction(IFUProcessingObject):
         return fluxes
 
     # Get the PSF FWHM for each channel
-    @staticmethod()
+    @staticmethod
     def get_fwhm(psf):
         if len(psf.shape) ==3 :
             fwhm_fit = vip.var.fit_2dgaussian(psf[0], crop=True, cropsize=8, debug=False)
