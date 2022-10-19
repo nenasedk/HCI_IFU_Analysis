@@ -43,7 +43,7 @@ from pynpoint import Pypeline, \
 
 from IFUData import IFUData,SpectralData
 from IFUData import IFUProcessingObject
-
+from IFUMath import gauss_fit,laplace_fit,photometric_error,sum_bkg_error
 
 class IFU1DExtraction(IFUProcessingObject):
     def __init__(self,
@@ -145,6 +145,257 @@ class IFU1DExtraction(IFUProcessingObject):
 
         fwhm = np.mean(np.array([fwhm_fit['fwhm_y'],fwhm_fit['fwhm_x']]))*self.pixel_scale.value # fit for fwhm
         return fwhm
+    def get_covariance(self):
+        if not "andromeda" in self.algorithm:
+            total_err,frac_err,_,_ = self.uncorrelated_error(residuals,
+                                                             self.flux_calibrated_spectra,
+                                                             npca,
+                                                             flux_cal=True)
+            cont_err,frac_cont_err,_,_ = self.uncorrelated_error(residuals,
+                                                                 self.contrasts,
+                                                                 posn_dict,
+                                                                 npca,
+                                                                 flux_cal=False)
+
+        else:
+            print("Using Andromeda calculated errors")
+            cont_err = np.load(f"{self.output_dir}_{self.instrument}_{self.planet_name}_contrast_err_point.npy")
+            total_err = cont_err * self.stellar_model.spectrum *(self.data.distance/self.distance_normalization)**2
+        # Now we can compute the correlation and covariance matrices
+        # The covariance matrix is normalised so that sqrt(diag(cov)) = uncorrelated error
+        cor,cov = self.calculate_covariance(residuals,total_err,posn_dict,nl,npca)
+        cor_cont,cov_cont = self.calculate_covariance(residuals,cont_err,posn_dict,nl,npca)
+        if not 'andromeda' in self.algorithm:
+            for i,nPC in enumerate(nPCA):
+                self.write_fits_bintable(f"spectrum_{nPC:03}",
+                                        [self.data.wlen,
+                                        self.flux_calibrated_spectra[i].spectrum,
+                                        self.contrasts[i].spectrum,
+                                        cov,
+                                        corr,
+                                        np.sqrt(cov.diagonal()),
+                                        cov_cont,
+                                        np.sqrt(cov_cont.diagonal())
+                                        ],
+                                        column_names=["WAVELENGTH",
+                                        "FLUX",
+                                        "CONTRAST",
+                                        "COVARIANCE",
+                                        "CORRELATION",
+                                        "ERROR",
+                                        "COVARIANCE_CONTRAST",
+                                        "ERROR_CONTRAST"],
+                                        units=["micron",
+                                            "W/m2/micron",
+                                            "Fp/F*",
+                                            "[W/m2/micron]^2",
+                                            " - ",
+                                            "W/m2/micron",
+                                            "[Fp/F*]^2",
+                                            "Fp/F*"]
+                                        )
+        else:
+            self.write_fits_bintable(f"spectrum",
+                                        [self.data.wlen,
+                                        self.flux_calibrated_spectra[i].spectrum,
+                                        self.contrasts[i].spectrum,
+                                        cov,
+                                        corr,
+                                        np.sqrt(cov.diagonal()),
+                                        cov_cont,
+                                        np.sqrt(cov_cont.diagonal())
+                                        ],
+                                        column_names=["WAVELENGTH",
+                                        "FLUX",
+                                        "CONTRAST",
+                                        "COVARIANCE",
+                                        "CORRELATION",
+                                        "ERROR",
+                                        "COVARIANCE_CONTRAST",
+                                        "ERROR_CONTRAST"],
+                                        units=["micron",
+                                            "W/m2/micron",
+                                            "Fp/F*",
+                                            "[W/m2/micron]^2",
+                                            " - ",
+                                            "W/m2/micron",
+                                            "[Fp/F*]^2",
+                                            "Fp/F*"]
+                                        )
+        print("Done!")
+
+        # All of the outputs get combined and saved to a fits file
+        if not "andromeda" in data_dir.lower():
+            fits_output(spectrum,cov,cor, pcas=pcas, contrast = contrasts, cont_cov = cov_cont)
+        else:
+            fits_output(spectrum,cov,cor, pcas=pcas, contrast = contrasts, cont_cov = cov_cont, error = total_err, cont_error = cont_err)
+
+    def calculate_covariance(self,
+                    residuals,
+                    total_err,
+                    npca=None,
+                    annulus_width = 6):
+        print("Computing Covariance...")
+        r_in = self.posn[0]/self.pixel_scale - annulus_width//2
+        r_out = self.posn[0]/self.pixel_scale + annulus_width//2
+        annulus_c = CircularAnnulus(self.data.center,r_in = r_in, r_out = r_out)
+        if npca is not None:
+            cors = []
+            covs = []
+            for j in range(npca):
+                print("Found covariances for errors for ",j+1,"/",npca," PCs.")
+                fluxes = []
+                for i in range(nl):
+                    # Stack and median subtract
+                    med = residuals[j,i]
+
+                    # Mask out planet (not sure if correct location)
+                    mask = create_circular_mask(residuals.shape[-2],residuals.shape[-1],
+                                                center = self.posn,
+                                                radius = annulus_width)
+
+                    # Get fluxes of all pixels within annulus
+                    annulus = annulus_c.to_mask(method='center')
+                    flux = annulus.multiply(mask*med)[annulus.data>0]
+                    fluxes.append(flux)
+                    if i==30 and j==2:
+                        fig,ax = plt.subplots(ncols = 2, figsize=(16,8))
+                        ax = ax.flatten()
+                        im0 = ax[0].imshow(med)
+                        im1 = ax[1].imshow(med*mask)
+                        theta = np.linspace(0, 2*np.pi, 100)
+                        a = r_out*np.cos(theta)+ self.center[0]
+                        b = r_out*np.sin(theta)+ self.center[1]
+                        c = r_in*np.cos(theta)+ self.center[0]
+                        d = r_in*np.sin(theta)+ self.center[1]
+                        ax[1].plot(a,b,c='r')
+                        ax[1].plot(c,d,c='r')
+                        plt.colorbar(im0,ax=ax[0])
+                        plt.colorbar(im1,ax=ax[1])
+                        plt.savefig(f"{self.output_dir}{self.planet_name}_annulus_check.pdf")
+                fluxes = np.array(fluxes)
+
+                # Compute correlation, Eqn 1 Samland et al 2017, https://arxiv.org/pdf/1704.02987.pdf
+                cor = np.zeros((fluxes.shape[0],fluxes.shape[0]))
+                cov = np.zeros((fluxes.shape[0],fluxes.shape[0]))
+                for m in range(len(self.data.wlen)):
+                    for n in range(len(self.data.wlen)):
+                        top =    np.mean(np.dot(fluxes[m],fluxes[n]))
+                        bottom = np.sqrt(np.mean(np.dot(fluxes[m],fluxes[m]))*np.mean(np.dot(fluxes[n],fluxes[n])))
+                        cor[m,n] = top/bottom
+                        cov[m,n] = top/bottom * (total_err[j,m]*total_err[j,n])
+                cors.append(cor)
+                covs.append(cov)
+            cors = np.array(cors)
+            covs = np.array(covs)
+
+            np.save(f"{self.output_dir}_{self.instrument}_{self.planet_name}_correlation",cors)
+            np.save(f"{self.output_dir}_{self.instrument}_{self.planet_name}_covariance",covs)
+            return cors,covs
+
+        else:
+            fluxes = []
+            for i in range(nl):
+                # Stack and median subtract
+                med = residuals[i]- np.mean(residuals[i])
+                # Mask out planet (not sure if correct location)
+                mask = create_circular_mask(residuals.shape[-2],residuals.shape[-1],
+                                            center = self.posn,
+                                            radius = annulus_width)
+                # Get fluxes of all pixels within annulus
+                annulus = annulus_c.to_mask(method='center')
+                flux = annulus.multiply(mask*med)[annulus.data>0]
+                fluxes.append(flux)
+                if i==25:
+                    fig,ax = plt.subplots(ncols = 2, figsize=(16,8))
+                    ax = ax.flatten()
+                    im0 = ax[0].imshow(med)
+                    im1 = ax[1].imshow(med*mask)
+                    theta = np.linspace(0, 2*np.pi, 100)
+                    a = r_out*np.cos(theta)+ self.center[0]
+                    b = r_out*np.sin(theta)+ self.center[1]
+                    c = r_in*np.cos(theta)+ self.center[0]
+                    d = r_in*np.sin(theta)+ self.center[1]
+                    ax[1].plot(a,b,c='r')
+                    ax[1].plot(c,d,c='r')
+                    plt.colorbar(im0,ax=ax[0])
+                    plt.colorbar(im1,ax=ax[1])
+                    plt.savefig(data_dir + "annulus_check.pdf")
+            fluxes = np.array(fluxes)
+            cor = np.zeros((fluxes.shape[0],fluxes.shape[0]))
+            cov = np.zeros((fluxes.shape[0],fluxes.shape[0]))
+
+            for m in range(nl):
+                for n in range(nl):
+                    top =    np.mean(np.dot(fluxes[m],fluxes[n]))
+                    bottom = np.sqrt(np.mean(np.dot(fluxes[m],fluxes[m]))*np.mean(np.dot(fluxes[n],fluxes[n])))
+                    #print(top,bottom)
+                    cor[m,n] = top/bottom
+                    cov[m,n] = top/bottom * (total_err[m]*total_err[n])
+
+            np.save(f"{self.output_dir}_{self.instrument}_{self.planet_name}_correlation",cor)
+            np.save(f"{self.output_dir}_{self.instrument}_{self.planet_name}_covariance",cov)
+            return cor, cov
+
+    def uncorrelated_error(residuals,
+                           width = 6.0,
+                           mode = 'gaussian'):
+        annulus_bkg = annulus(datacenter, bkg_separation/platescale, width=width)
+        annulus_planet = annulus(datacenter, self.posn[0]/self.pixel_scale, width = width)
+        if 'gauss' in mode:
+            err_func = gauss_fit
+        elif 'laplace' in mode:
+            err_func = laplace_fit
+        fluxes, error = self.annulus_error(residuals,
+                                           annulus_planet,
+                                           err_func,
+                                           width,
+                                           planet_spectrum = None,
+                                           stellar_spectrum = None,
+                                           plot = False)
+        return fluxes, error
+
+    def annulus_error(self,
+                      residuals,
+                      annulus_c,
+                      error_function,
+                      annulus_width,
+                      planet_spectrum = None,
+                      stellar_spectrum = None,
+                      mask_list = None,
+                      plot = False):
+        nl = self.data.wlen.shape[0]
+        if stellar_spectrum is None:
+            stellar_spectrum = np.ones(nl)
+        if planet_spectrum is None:
+            planet_spectrum = np.ones(nl)
+
+        fluxes = []
+        errors = []
+        masks = [create_circular_mask(residuals.shape[-2],residuals.shape[-1],
+                                    center = self.posn,
+                                    radius = annulus_width)]
+        if mask_list is not None:
+            for mask in mask_list:
+                masks.append(create_circular_mask(residuals.shape[-2],residuals.shape[-1],
+                                                center = mask,
+                                                radius = annulus_width))
+        for i in range(nl):
+            # Stack and median subtract
+            med = data[i]
+            # Mask out planet (not sure if correct location)
+            # Get fluxes of all pixels within annulus
+            annulus = annulus_c.to_mask(method='center')
+            for mask in masks:
+                med *= mask
+            # Assuming contrast units for residuals
+            flux = annulus.multiply(med)[annulus.data>0]*self.stellar_spectrum.spectrum[i]
+            mean, error = error_function(flux, plot)
+            fluxes.append(flux)
+            errors.append(error)
+        fluxes = np.array(fluxes)
+        errors = np.array(errors)
+        return fluxes, errors
 
     def plot_spectra(self,
                      spectra_list,
