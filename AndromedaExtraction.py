@@ -232,6 +232,7 @@ def init():
         band = dataset.prihdrs[0]['APODIZER'].split('_')[1]
         spot_to_star_ratio = dataset.spot_ratio[band]
         NORMFACTOR = spot_to_star_ratio
+
         CENTER = (np.mean(dataset.centers[:,0]),np.mean(dataset.centers[:,1]))
 
         # Need to order the GPI data for pynpoint

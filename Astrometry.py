@@ -66,7 +66,7 @@ def init_gpi(data_dir):
     # PynPoint structure GPIH, GPIK1, GPIK2
     global instrument
     instrument = "GPI"
-    psf_name = glob.glob(data_dir + "*_PSF_cube.fits")[0]
+    psf_name = glob.glob(data_dir + "*psf_cube.fits")[0]
 
     psf = fits.open(psf_name)[0].data
     if not os.path.isdir(data_dir + "pyklip"):

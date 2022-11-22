@@ -314,6 +314,9 @@ def get_covariance(residuals,total_err,posn_dict,nl,npca=None):
         np.save(data_dir + instrument + "_" + planet_name + "_covariance",cov)
         return cor,cov
 
+def get_bias_uncertainty(spectrum):
+    mcmc_outputs = np.load(data_dir + instrument + "_" + planet_name + "_mcmc_outputs.np")
+    return mcmc_outputs
 
 def uncorrelated_error(residuals,spectrum,posn_dict,nl,npca=None,flux_cal = True):
     # load in full residual file
@@ -328,12 +331,14 @@ def uncorrelated_error(residuals,spectrum,posn_dict,nl,npca=None,flux_cal = True
     global nFrames
     print("Calculating Uncorrelated Errors...")
 
-    if "gpi" in instrument.lower():
-        loc = 1050.
-    elif "sphere" in instrument.lower():
-        loc = 750.
+    #if "gpi" in instrument.lower():
+    #    loc = 1050.
+    #elif "sphere" in instrument.lower():
+    #    loc = 750.
     center = CENTER
     width = 3
+
+    loc = posn_dict["Separation [mas]"][0]
     r_in = loc/1000/pxscale - width
     r_out = loc/1000/pxscale + width
     #r_in = posn_dict['Separation [mas]'][0]/1000/pxscale - 3
@@ -541,7 +546,7 @@ def fits_one_output(spectrum,covariance,correlation,pca=None,contrast = None,con
     if pca is not None:
         pcastr = "_"+str(pca).zfill(2)
         outstring += pcastr
-    outstring += "_spectrum.fits"
+    outstring += "_spectrum_localerror.fits"
     hdul.writeto(outstring,overwrite=True,checksum=True,output_verify='exception')
     return
 

@@ -35,6 +35,7 @@ def laplace_fit(array, plot = False):
 def snr_circles(frame,posn,fwhm, plot):
     snr = vip.metrics.snr(frame,source_xy=(posn[0],posn[1]), fwhm=fwhm, plot=plot)
     return snr
+
 def snr_error_estimate(data,posn,fwhm, planet_spectrum = None, plot = False):
     nl = data.shape[0]
     if planet_spectrum is None:

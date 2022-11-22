@@ -145,6 +145,7 @@ class IFU1DExtraction(IFUProcessingObject):
 
         fwhm = np.mean(np.array([fwhm_fit['fwhm_y'],fwhm_fit['fwhm_x']]))*self.pixel_scale.value # fit for fwhm
         return fwhm
+
     def get_covariance(self):
         if not "andromeda" in self.algorithm:
             total_err,frac_err,_,_ = self.uncorrelated_error(residuals,
@@ -544,7 +545,8 @@ class KLIP1DExtraction(IFU1DExtraction):
                              stamp_size = 9,
                              sections = 10,
                              mode = "ADI+SDI",
-                             numthreads = None):
+                             numthreads = None,
+                             save_outputs = True):
         """
         Run KLIP
 
@@ -574,7 +576,7 @@ class KLIP1DExtraction(IFU1DExtraction):
                             np.unique(dataset.wvs),
                             stamp_size = stamp_size,
                             datatype = dtype,
-                            save_outputs = True) #must be double?
+                            save_outputs = save_outputs) #must be double?
 
         ###### Now run KLIP! ######
         fm.klip_dataset(dataset,
@@ -654,6 +656,121 @@ class KLIP1DExtraction(IFU1DExtraction):
                                     outputdir=self.output_dir)
         return
 
+    def mcmc_bias_correction(self,
+                             dataset,
+                             input_spectrum,
+                             planet_sep,
+                             planet_pa,
+                             spot_to_star_ratio,
+                             stellar_model,
+                             npas = 11,
+                             numbasis = [2],
+                             maxnumbasis = 99,
+                             movement = None,
+                             flux_overlap = 0.2,
+                             stamp_size = 9,
+                             sections = 10,
+                             mode = "ADI+SDI",
+                             numthreads = None,
+                             output_distance = 1.0):
+        print("Running MCMC to compute over-subtraction scaling factor.")
+        N_frames = len(dataset.input)
+        N_cubes = np.size(np.unique(dataset.filenums))
+        nl = N_frames // N_cubes
+
+        # This could take a long time to run
+        # Define a set of PAs to put in fake sources
+        pas = (np.linspace(planet_pa, planet_pa+360, num=npas+2)%360)[1:-1]
+
+        # For numbasis "k"
+        # repeat the spectrum over each cube in the dataset
+        scaling = []
+        input_spect = np.tile(input_spectrum*self.contrast_normalization, N_cubes)
+        np.save(f"{self.output_dir}{self.instrument}_{self.planet_name}_input_for_bias",input_spect)
+        fake_spectra = np.zeros((npas, len(numbasis), nl))
+        for p, para in enumerate(pas):
+            tmp_dataset = self.inject_planet()
+            exspect = self.run_klip_extractspec(tmp_dataset,
+                                                (planet_sep,para),
+                                                numbasis = numbasis,
+                                                maxnumbasis = maxnumbasis,
+                                                movement = movement,
+                                                flux_overlap = flux_overlap,
+                                                stamp_size = stamp_size,
+                                                sections = section,
+                                                mode = mode,
+                                                numthreads = numthreads,
+                                                save_outputs = False)
+            contrasts = exspect*self.contrast_normalization * (self.dit_science/self.dit_flux)
+            fake_spectra[:,p] = contrasts
+            #np.save(f"{data_dir}pyklip/{instrument}_{planet_name}_biasrecovery_pa{p:03}",fake_spectra)
+            scaling.append(input_spectrum*self.contrast_normalization/(contrasts/dataset.dn_per_contrast[:nl]))
+
+        scaling = np.array(scaling)
+        np.save(f"{self.output_dir}{self.instrument}_{self.planet_name}_mcmc_extracted",fake_spectra)
+        np.save(f"{self.output_dir}{self.instrument}_{self.planet_name}_mcmc_bias_scale_factor",scaling)
+        bias_corrected_spectrum = [SpectralData(name = f"{self.algorithm}-bias_corrected-{i:03}",
+                                                wavelength = self.data.wlen.value,
+                                                spectrum = flux.spectrum * np.mean(scaling,axis=0)[i],
+                                                distance = 1.0) for i, flux in enumerate(self.flux_calibrated_spectra)]
+        return bias_corrected_spectrum
+    def inject_planet():
+        # We will need to create a new dataset each time.
+        N_frames = len(dataset.input)
+        N_cubes = np.size(np.unique(dataset.filenums))
+        nl = N_frames // N_cubes
+
+        # PSF model template for each cube observation, copies of the PSF model:
+        inputpsfs = np.tile(dataset.psfs, (N_cubes, 1, 1))
+        #bulk_contrast = 1e-2
+        fake_psf = inputpsfs*fake_flux[:,None,None]*dataset.dn_per_contrast[:,None,None]
+
+        planet_sep = planet_sep/1000/self.pixel_scale #mas to pixels
+
+        tmp_dataset = self.init_dataset()
+
+        tmp_PSF_cube,cal_cube,spot_to_star_ratio = init_psfs(tmp_dataset)
+        print(fake_psf.shape,PSF_cube.shape)
+        print(np.mean(fake_psf),np.mean(PSF_cube))
+        fakes.inject_planet(tmp_dataset.input, tmp_dataset.centers, fake_psf,\
+                                        tmp_dataset.wcs, planet_sep, pa)
+        return tmp_dataset
+    def recover_fake(dataset, PSF_cube, planet_sep, pa, fake_flux):
+
+        fm_class = es.ExtractSpec(tmp_dataset.input.shape,
+                                numbasis,
+                                planet_sep,
+                                pa,
+                                PSF_cube,
+                                np.unique(tmp_dataset.wvs),
+                                stamp_size = stamp_size,
+                                datatype = 'float')
+
+        fm.klip_dataset(tmp_dataset, fm_class,
+                        fileprefix = instrument + "_" + planet_name +"_fakespect",
+                        mode = mode,
+                        annuli=[[planet_sep-1.5*stamp_size,planet_sep+1.5*stamp_size]], # select a patch around the planet (radius)
+                        subsections=[[(pa-2.0*stamp_size)/180.*np.pi,\
+                                    (pa+2.0*stamp_size)/180.*np.pi]], # select a patch around the planet (angle)
+                        movement=None,
+                        flux_overlap = 0.2,
+                        numbasis = numbasis,
+                        maxnumbasis=maxnumbasis,
+                        numthreads=numthreads,
+                        spectrum=None,
+                        #time_collapse = 'weighted-mean',
+                        save_klipped=True,
+                        highpass=True,
+                        calibrate_flux=True,
+                        outputdir=data_dir + "pyklip/",
+                        mute_progression=True)
+
+        fake_spect, fakefm = es.invert_spect_fmodel(tmp_dataset.fmout,
+                                            tmp_dataset, method="leastsq",
+                                            units="natural", scaling_factor=1.0)
+        del tmp_dataset
+        return fake_spect
+
 class Andromeda1DExtraction(IFU1DExtraction):
     def __init__(self,
                  IFUdata : IFUData,
@@ -722,6 +839,7 @@ class Andromeda1DExtraction(IFU1DExtraction):
                                label = "Contrast",
                                units = "[F$_{p}$/F_{*}$]")
         return self.contrasts, self.flux_calibrated_spectra
+
     def run_andromeda(self,
                       inner_working_angle = 2.0,
                       annuli_width = 0.8,
