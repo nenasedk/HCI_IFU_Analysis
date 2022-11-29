@@ -41,13 +41,15 @@ from pynpoint import Pypeline, \
                      SimplexMinimizationModule,\
                      WavelengthReadingModule
 
-from IFUData import IFUData,SpectralData
-from IFUData import IFUProcessingObject
+from IFUData import IFUData, SpectralData, IFUProcessingObject
+from IFUAstrometry import IFUAstrometry
 from IFUMath import gauss_fit,laplace_fit,photometric_error,sum_bkg_error
+from typing import Optional, Tuple
+from abc import abstractmethod
 
 class IFU1DExtraction(IFUProcessingObject):
     def __init__(self,
-                 IFUdata : IFUData,
+                 IFUDataSet : IFUData,
                  instrument : str,
                  planet_name: str,
                  estimated_position : Tuple,
@@ -56,22 +58,23 @@ class IFU1DExtraction(IFUProcessingObject):
                  psf_scaling: Optional[float] = 1.0,
                  pixel_scale: Optional[float] = 1.0,
                  distance_normalization: Optional[float] = 10.0,
-                 input_path: Optional[str] = "",
-                 output_path: Optional[str] = "",
+                 input_dir: Optional[str] = "",
+                 output_dir: Optional[str] = "",
                  verbose = 2,
                  algorithm = None
                  ):
         super().__init__(instrument = instrument,
                          planet_name = planet_name,
-                         IFUData = IFUData,
-                         input_path = input_path,
-                         output_path = output_path)
-
+                         IFUDataSet = IFUDataSet,
+                         input_dir = input_dir,
+                         output_dir = output_dir)
+        if verbose > 1:
+            print(f"Initialising {instrument} dataset for {planet_name}.")
         self.guessep,self.guesspa = estimated_position
         self.guessep*=u.mas
         self.guesspa*=u.degree
-        self.dit_science = science_integration_time*u.second
-        self.dit_flux = psf_integration_time*u.second
+        self.dit_science = science_integration_time
+        self.dit_flux = psf_integration_time
         self.psf_scaling = psf_scaling
         self.pixel_scale = pixel_scale*u.mas
         self.contrast_normalization = 1.0
@@ -96,20 +99,32 @@ class IFU1DExtraction(IFUProcessingObject):
                        guessflux = 1e-6,
                        stellar_type = 'A0V'):
         astro_obj = IFUAstrometry(self.data,
-                                  self.instrument,
-                                  self.planet_name,
-                                  (self.guessep.value,self.guesspa.value),
-                                  self.pixel_scale,
-                                  self.input_path,
-                                  f"{self.input_path}pyklip/",
-                                  self.verbose)
+                                  instrument = self.instrument,
+                                  planet_name = self.planet_name,
+                                  estimated_position=(self.guessep.value,self.guesspa.value),
+                                  pixel_scale = self.pixel_scale,
+                                  input_dir = self.input_dir,
+                                  output_dir = self.output_dir,
+                                  verbose = self.verbose)
         x_offset, y_offset = astro_obj.get_astrometry(guessflux,stellar_type)
         self.posn = (self.data.center[0] + x_offset, self.data.center[1] + y_offset)
         return self.posn
 
-    def load_stellar_model(path):
+    def relative_astrometry_to_px(self,posn):
+        x_px = (posn[0].value/self.pixel_scale)*np.sin(posn[1].to(u.rad).value)
+        y_px = -(posn[0].value/self.pixel_scale)*np.cos(posn[1].to(u.rad).value)
+        # negative because of image orientation on sky
+        return x_px,y_px
+
+    def pixels_to_relative_astrometry(self,posn_px):
+        sep = np.sqrt(posn_px[0]**2 + posn_px[1]**2)*self.pixel_scale
+        pa = np.arctan(posn_px[0]/posn_px[1]) * 180/np.pi * u.degree #TODO check trig
+        return sep,pa
+
+    def load_stellar_model(self, path):
         self.stellar_model = SpectralData(f"{self.data.name}_stellar_model",
                                           path)
+        self.stellar_model.load_spectral_data()
         return self.stellar_model.wlen, self.stellar_model.spectrum
 
     def normalize_contrast_spectrum(self,
@@ -123,15 +138,15 @@ class IFU1DExtraction(IFUProcessingObject):
                                        distance = self.data.distance) for i,contrast in enumerate(contrasts)]
         return contrasts
 
-    def contrasts_to_flux(self,
-                          contrasts,
-                          stellar_model,
-                          input_distance,
-                          output_distance):
-        fluxes = [contrast.spectrum * stellar_model.spectrum * (input_distance/output_distance)**2 for contrast in contrasts]
+    def contrast_to_flux(self,
+                         contrasts,
+                         stellar_model,
+                         input_distance,
+                         output_distance):
+        fluxes = np.array([contrast.spectrum * stellar_model.spectrum * (input_distance/output_distance)**2 for contrast in contrasts])
         self.flux_calibrated_spectra = [SpectralData(name = f"{self.algorithm}-flux-{i:03}",
                                                     wavelength = self.data.wlen.value,
-                                                    spectrum = flux.value,
+                                                    spectrum = flux,
                                                     distance = output_distance) for i,flux in enumerate(fluxes)]
         return fluxes
 
@@ -466,7 +481,7 @@ class IFU1DExtraction(IFUProcessingObject):
 
 class KLIP1DExtraction(IFU1DExtraction):
     def __init__(self,
-                 IFUdata : IFUData,
+                 IFUDataSet : IFUData,
                  instrument : str,
                  planet_name: str,
                  estimated_position : Tuple,
@@ -475,23 +490,22 @@ class KLIP1DExtraction(IFU1DExtraction):
                  psf_scaling: Optional[float] = 1.0,
                  pixel_scale: Optional[float] = 1.0,
                  distance_normalization: Optional[float] = 10.0,
-                 input_path: Optional[str] = "",
-                 output_path: Optional[str] = "",
-                 verbose = 2,
-                 algorithm = "klip"
-                 ):
-        super().__init__(IFUData,
-                         instrument,
-                         planet_name,
-                         estimated_position,
-                         science_integration_time,
-                         psf_integration_time,
-                         psf_scaling,
-                         pixel_scale,
-                         distance_normalization,
-                         input_path,
-                         output_path,
-                         verbose)
+                 input_dir: Optional[str] = "",
+                 output_dir: Optional[str] = "",
+                 verbose = 2):
+        super().__init__(IFUDataSet = IFUDataSet,
+                         instrument = instrument,
+                         planet_name = planet_name,
+                         estimated_position = estimated_position,
+                         science_integration_time = science_integration_time,
+                         psf_integration_time = psf_integration_time,
+                         psf_scaling = psf_scaling,
+                         pixel_scale = pixel_scale,
+                         distance_normalization = distance_normalization,
+                         input_dir = input_dir,
+                         output_dir =output_dir,
+                         verbose = verbose,
+                         algorithm =  "klip")
 
     def extract_1d_spectrum(self,
                             posn,
@@ -502,8 +516,10 @@ class KLIP1DExtraction(IFU1DExtraction):
 
         dataset = self.init_dataset(science_base_name = "distorcorr")
 
-        exspect = self.run_klip_extractspec(posn,
-                                            numbasis = [2],
+        # Default params for klip
+        exspect = self.run_klip_extractspec(dataset,
+                                            posn,
+                                            numbasis = numbasis,
                                             maxnumbasis = 99,
                                             movement = None,
                                             flux_overlap = 0.2,
@@ -537,7 +553,8 @@ class KLIP1DExtraction(IFU1DExtraction):
 
     def run_klip_extractspec(self,
                              dataset,
-                             posn,
+                             planet_pa,
+                             planet_sep,
                              numbasis = [2],
                              maxnumbasis = 99,
                              movement = None,
@@ -554,8 +571,7 @@ class KLIP1DExtraction(IFU1DExtraction):
             posn : tuple(float,float)
                 The position of the planet, in (separation [mas], pa [degree])
         """
-        planet_sep, planet_pa = posn
-        planet_sep*= u.arcsec
+        planet_sep*= u.mas
         planet_pa *= u.degree
         planet_sep =planet_sep / self.pixel_scale #mas to pixels
 
@@ -575,8 +591,7 @@ class KLIP1DExtraction(IFU1DExtraction):
                             self.data.psf,
                             np.unique(dataset.wvs),
                             stamp_size = stamp_size,
-                            datatype = dtype,
-                            save_outputs = save_outputs) #must be double?
+                            datatype = dtype) #must be double?
 
         ###### Now run KLIP! ######
         fm.klip_dataset(dataset,
@@ -619,7 +634,8 @@ class KLIP1DExtraction(IFU1DExtraction):
 
     def run_klip_parallel(self,
                           dataset,
-                          posn,
+                          planet_pa,
+                          planet_sep,
                           annuli = 12,
                           subsections = 10,
                           numbasis = [2],
@@ -635,7 +651,7 @@ class KLIP1DExtraction(IFU1DExtraction):
         # Run KLIP again at the end so we can get the full residuals,
         # which we need for the covariance matrix later.
         planet_sep, planet_pa = posn
-        planet_sep*= u.arcsec
+        planet_sep*= u.mas #units are wrong
         planet_pa *= u.degree
         planet_sep =planet_sep / self.pixel_scale #mas to pixels        ###### The forward model class ######
 
@@ -659,9 +675,8 @@ class KLIP1DExtraction(IFU1DExtraction):
     def mcmc_bias_correction(self,
                              dataset,
                              input_spectrum,
-                             planet_sep,
                              planet_pa,
-                             spot_to_star_ratio,
+                             planet_sep,
                              stellar_model,
                              npas = 11,
                              numbasis = [2],
@@ -735,6 +750,7 @@ class KLIP1DExtraction(IFU1DExtraction):
         fakes.inject_planet(tmp_dataset.input, tmp_dataset.centers, fake_psf,\
                                         tmp_dataset.wcs, planet_sep, pa)
         return tmp_dataset
+
     def recover_fake(dataset, PSF_cube, planet_sep, pa, fake_flux):
 
         fm_class = es.ExtractSpec(tmp_dataset.input.shape,
@@ -745,7 +761,6 @@ class KLIP1DExtraction(IFU1DExtraction):
                                 np.unique(tmp_dataset.wvs),
                                 stamp_size = stamp_size,
                                 datatype = 'float')
-
         fm.klip_dataset(tmp_dataset, fm_class,
                         fileprefix = instrument + "_" + planet_name +"_fakespect",
                         mode = mode,
@@ -773,7 +788,7 @@ class KLIP1DExtraction(IFU1DExtraction):
 
 class Andromeda1DExtraction(IFU1DExtraction):
     def __init__(self,
-                 IFUdata : IFUData,
+                 IFUdataSet : IFUData,
                  instrument : str,
                  planet_name: str,
                  estimated_position : Tuple,
@@ -782,22 +797,22 @@ class Andromeda1DExtraction(IFU1DExtraction):
                  psf_scaling: Optional[float] = 1.0,
                  pixel_scale: Optional[float] = 1.0,
                  distance_normalization: Optional[float] = 10.0,
-                 input_path: Optional[str] = "",
-                 output_path: Optional[str] = "",
+                 input_dir: Optional[str] = "",
+                 output_dir: Optional[str] = "",
                  verbose = 2
                  ):
-        super().__init__(IFUData,
-                         instrument,
-                         planet_name,
-                         estimated_position,
-                         science_integration_time,
-                         psf_integration_time,
-                         psf_scaling,
-                         pixel_scale,
-                         distance_normalization,
-                         input_path,
-                         output_path,
-                         verbose,
+        super().__init__(IFUDataSet = IFUDataSet,
+                         instrument = instrument,
+                         planet_name = planet_name,
+                         estimated_positino = estimated_position,
+                         science_integration_time = science_integration_time,
+                         psf_integration_time = psf_integration_time,
+                         psf_scaling = psf_scaling,
+                         pixel_scale = pixel_scale,
+                         distance_normalization = distance_normalization,
+                         input_dir = input_dir,
+                         output_dir =output_dir,
+                         verbose = verbose,
                          algorithm = "andromeda")
     def preproc_data(self):
         if "gpi" in self.instrument:
@@ -855,11 +870,11 @@ class Andromeda1DExtraction(IFU1DExtraction):
             warnings.warn("Incorrect telescope diameter! Check instrument.")
             diam_tel = 1.0*u.m
 
-        for i,stack in enumerate(self.IFUData.data):
-            fwhm = self.get_fwhm(self.IFUData.psf[i])
+        for i,stack in enumerate(self.data.cube):
+            fwhm = self.get_fwhm(self.data.psf[i])
             cube = np.nan_to_num(stack)
-            psf = np.nan_to_num(self.IFUData.psf[i])
-            PIXSCALE_NYQUIST = (1/2.*self.IFUData.wlen[i].to(u.m)/diam_tel)*180*3600*1e3/np.pi # Pixscale at Shannon [mas/px]
+            psf = np.nan_to_num(self.data.psf[i])
+            PIXSCALE_NYQUIST = (1/2.*self.data.wlen[i].to(u.m)/diam_tel)*180*3600*1e3/np.pi # Pixscale at Shannon [mas/px]
             oversampling = PIXSCALE_NYQUIST /  self.pixel_scale                # Oversampling factor [1]
 
             if "sphere" in instrument.lower():
@@ -947,7 +962,7 @@ class Andromeda1DExtraction(IFU1DExtraction):
 
         # Flux
 
-        fluxes = self.contrasts_to_flux(self.contrasts,
+        fluxes = self.contrast_to_flux(self.contrasts,
                                         self.stellar_model,
                                         self.data.distance,
                                         output_distance = self.distance_normalization)
@@ -956,7 +971,7 @@ class Andromeda1DExtraction(IFU1DExtraction):
 
 class Pynpoint1DExtraction(IFU1DExtraction):
     def __init__(self,
-                 IFUdata : IFUData,
+                 IFUdataSet : IFUData,
                  instrument : str,
                  planet_name: str,
                  estimated_position : Tuple,
@@ -965,23 +980,23 @@ class Pynpoint1DExtraction(IFU1DExtraction):
                  psf_scaling: Optional[float] = 1.0,
                  pixel_scale: Optional[float] = 1.0,
                  distance_normalization: Optional[float] = 10.0,
-                 input_path: Optional[str] = "",
-                 output_path: Optional[str] = "",
-                 verbose = 2,
-                 algorithm = "pynpoint"
+                 input_dir: Optional[str] = "",
+                 output_dir: Optional[str] = "",
+                 verbose = 2
                  ):
-        super().__init__(IFUData,
-                         instrument,
-                         planet_name,
-                         estimated_position,
-                         science_integration_time,
-                         psf_integration_time,
-                         psf_scaling,
-                         pixel_scale,
-                         distance_normalization,
-                         input_path,
-                         output_path,
-                         verbose)
+        super().__init__(IFUDataSet = IFUDataSet,
+                         instrument = instrument,
+                         planet_name = planet_name,
+                         estimated_positino = estimated_position,
+                         science_integration_time = science_integration_time,
+                         psf_integration_time = psf_integration_time,
+                         psf_scaling = psf_scaling,
+                         pixel_scale = pixel_scale,
+                         distance_normalization = distance_normalization,
+                         input_dir = input_dir,
+                         output_dir =output_dir,
+                         verbose = verbose,
+                         algorithm = "pynpoint")
 
     def extract_1d_spectrum(self,
                             posn,
@@ -1003,7 +1018,7 @@ class Pynpoint1DExtraction(IFU1DExtraction):
         # PynPoint normalizes the contrast DURING processing
         contrasts = self.normalize_contrast_spectrum(contrasts,
                                                      normalization_factor=1.0)
-        fluxes = self.contrasts_to_flux(self.contrasts,
+        fluxes = self.contrast_to_flux(self.contrasts,
                                         self.stellar_model,
                                         self.data.distance,
                                         output_distance = self.distance_normalization)

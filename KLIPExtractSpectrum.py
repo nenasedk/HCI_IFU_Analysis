@@ -431,7 +431,11 @@ def recover_fake(dataset, PSF_cube, files, position, fake_flux):
     # PSF model template for each cube observation, copies of the PSF model:
     inputpsfs = np.tile(dataset.psfs, (N_cubes, 1, 1))
     #bulk_contrast = 1e-2
-    fake_psf = inputpsfs*fake_flux[:,None,None]*dataset.dn_per_contrast[:,None,None]
+    norm = np.tile(np.max(dataset.psfs,axis=(1,2)), N_cubes)
+
+    fake_psf = inputpsfs*fake_flux[:,None,None]
+    if "gpi" in instrument.lower():
+        fake_psf*=dataset.dn_per_contrast[:,None,None]/norm[:,None,None]
 
     planet_sep, pa = position
     planet_sep = planet_sep/1000 / pxscale #mas to pixels
@@ -501,15 +505,15 @@ def mcmc_scaling(dataset,PSF_cube,posn,exspect,spot_to_star_ratio,stellar_model)
     # For numbasis "k"
     # repeat the spectrum over each cube in the dataset
     scaling = []
-    input_spect = np.tile(exspect[1,:]*spot_to_star_ratio, N_cubes)
-    np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "_input_for_bias",input_spect)
+    contrast_input = exspect[1,:]*spot_to_star_ratio*(DIT_SCIENCE/DIT_FLUX)
+    np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "_input_for_bias",contrast_input)
+    input_spect = np.tile(contrast_input, N_cubes)
     fake_spectra = np.zeros((npas, len(numbasis), nl))
     for p, para in enumerate(pas):
         fake_spectra[p,:] = recover_fake(dataset, PSF_cube, files, (planet_sep, para), input_spect)
         np.save(f"{data_dir}pyklip/{instrument}_{planet_name}_biasrecovery_pa{p:03}",fake_spectra)
-        scaling.append((exspect[1,:]*spot_to_star_ratio)/(fake_spectra[p,:]/dataset.dn_per_contrast[:nl]))
+        scaling.append(contrast_input/(fake_spectra[p,:]*spot_to_star_ratio*(DIT_SCIENCE/DIT_FLUX)))
     np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "mcmc_outputs",fake_spectra)
-
     scaling = np.array(scaling)
     sm = stellar_model[1]
     np.save(data_dir + "pyklip/"+ instrument + "_" + planet_name + "_mcmc_scale_factor",scaling)

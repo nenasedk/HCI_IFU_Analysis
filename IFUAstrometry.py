@@ -20,25 +20,30 @@ import pyklip.fm as fm
 import pyklip.fmlib.fmpsf as fmpsf
 import pyklip.fitpsf as fitpsf
 
-from IFUData import IFUProcessingObject
+from IFUData import IFUData,IFUProcessingObject
+from typing import Optional, Tuple
+from abc import abstractmethod
+
 class IFUAstrometry(IFUProcessingObject):
     def __init__(self,
-                 IFUdata : IFUData,
+                 IFUDataSet : IFUData,
                  instrument : str,
                  planet_name: str,
                  estimated_position : Tuple,
                  pixel_scale: Optional[float] = 1.0,
-                 input_path: Optional[str] = "",
-                 output_path: Optional[str] = "",
+                 input_dir: Optional[str] = "",
+                 output_dir: Optional[str] = "",
                  verbose = 2,
                  algorithm = "klip"
                  ):
-        super().__init__()
-        self.data = IFUData
-        self.instrument = instrument
-        self.planet_name = planet_name
-        self.guessep,self.guesspa = estimated_position
-        self.guessep*=u.mas
+        super().__init__(instrument = instrument,
+                         planet_name = planet_name,
+                         IFUDataSet = IFUDataSet,
+                         input_dir = input_dir,
+                         output_dir = output_dir)
+
+        self.guesssep,self.guesspa = estimated_position
+        self.guesssep*=u.mas
         self.guesspa*=u.degree
         self.pixel_scale = pixel_scale*u.mas
 
@@ -53,9 +58,9 @@ class IFUAstrometry(IFUProcessingObject):
                        guessflux = 1e-6,
                        stellar_type = 'A0V'):
         if os.path.exists(f"{self.output_dir}{self.planet_name}_astrometry.txt"):
-            astro_dict = self.read_astrometry(self.output_dir)
+            astro_dict = self.read_astrometry(self.output_dir, self.planet_name)
             self.set_posn_from_dict(astro_dict)
-            return self.x_offset_px,self.y_offset_px
+            return self.x_offset_px, self.y_offset_px
         return self.estimate_astrometry(guessflux,stellar_type)
 
     def estimate_astrometry(self, guessflux, stellar_type):
@@ -68,30 +73,36 @@ class IFUAstrometry(IFUProcessingObject):
         self.set_posn_from_dict(astro_dict)
         return self.x_offset_px,self.y_offset_px
 
-    def set_posn_from_dict(astro_dict):
+
+    def read_astrometry(self, data_dir, planet_name):
+        myfile = open(data_dir + planet_name + "_astrometry.txt")
+        astro_dict = {}
+        for i,line in enumerate(myfile):
+            print(i,line)
+            if i <= 1:
+                continue
+            if line =="":
+                continue
+            key = line.split(':')[0]
+            best_fit = float(line.split(':')[1].split('+')[0].strip())
+            error = float(line.split('+/-')[1].strip())
+            astro_dict[key] = (best_fit,error)
+        return astro_dict
+
+    def set_posn_from_dict(self,astro_dict):
         # read_astrometry gives offsets in x,y, need to compute absolute posns
         self.x_offset_px = -1*astro_dict["Px RA offset [px]"][0]
         self.y_offset_px = -1*astro_dict["Px Dec offset [px]"][0]
         self.posn = (astro_dict["Separation [mas]"][0]*u.mas, astro_dict["PA [deg]"][0]*u.degree)
         return self.posn
 
-    def relative_astrometry_to_px(posn):
-        x_px = (posn[0].value/self.pixel_scale)*np.sin(posn[1].to(u.rad).value)
-        y_px = -(posn[0].value/self.pixel_scale)*np.cos(posn[1].to(u.rad).value)
-        # negative because of image orientation on sky
-        return x_px,y_px
-
-    def pixels_to_relative_astrometry(posn_px):
-        sep = np.sqrt(posn_px[0]**2 + posn_px[1]**2)*self.pixel_scale
-        pa = np.arctan(posn_px[0]/posn_px[1]) #TODO check trig
-        return sep,pa
-
-    def klip_bayesian_astrometry(dataset,
+    def klip_bayesian_astrometry(self,
+                                 dataset,
                                  guessflux,
                                  stellar_type,
                                  numthreads = None):
         #### Astrometry Prep ###
-        numbasis=np.array([8])
+        numbasis=np.array([3])
         if "Ifs" in dataset.__class__.__name__:
             instrument = "SPHERE"
         else:
@@ -198,7 +209,7 @@ class IFUAstrometry(IFUProcessingObject):
                            pa_uncertainty=0.13)
         return fit
 
-    def write_astrometry(fit,data_dir,planet_name):
+    def write_astrometry(self,fit,data_dir,planet_name):
         # show what the raw uncertainites are on the location of the planet
         myfile = open(f"{data_dir}{planet_name}_astrometry.txt",'w+')
         myfile.write(planet_name + ' astrometry\n')
@@ -215,7 +226,7 @@ class IFUAstrometry(IFUProcessingObject):
         myfile.write("PA [deg]: {0:.3f} +/- {1:.3f}\n".format(fit.PA.bestfit, fit.PA.error))
         myfile.close()
 
-    def plot_astrometry(fit,data_dir,planet_name):
+    def plot_astrometry(self,fit,data_dir,planet_name):
         chain = fit.sampler.chain
 
         ### Astrometry Plots ###
